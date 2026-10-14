@@ -264,11 +264,23 @@ export async function runSimulation(params = {}, { keepFrames = true } = {}) {
   const picked = sampleIndices(constriction.length, MAX_FRAMES);
 
   return {
+    ...meshData(airway),
     positions: keepFrames ? picked.map((i) => toPoints(frames[i])) : [toPoints(airway.positions)],
     constriction: picked.map((i) => constriction[i]),
     final_constriction: constriction[constriction.length - 1],
     settled,
     steps: step,
+  };
+}
+
+/** The undeformed airway, for drawing before a simulation has run. */
+export function describeAirway(params = {}) {
+  const airway = new CylindricalAirway({ ...DEFAULT_PARAMS, ...params });
+  return { ...meshData(airway), positions: [toPoints(airway.positions)] };
+}
+
+function meshData(airway) {
+  return {
     initial_area: airway.initialArea,
     num_masses: airway.numMasses,
     num_radial: airway.numRadial,

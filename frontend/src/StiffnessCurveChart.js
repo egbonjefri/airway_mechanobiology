@@ -1,158 +1,110 @@
 import React, { useRef, useEffect } from 'react';
+import { FONT_FAMILY, setupCanvas, useThemeColors } from './theme';
+
+const WIDTH = 640;
+const HEIGHT = 360;
+const PADDING = { top: 12, right: 16, bottom: 56, left: 64 };
+
+// Round a tick step up to 1, 2, 2.5 or 5 times a power of ten
+const niceStep = (rough) => {
+  const power = 10 ** Math.floor(Math.log10(rough));
+  const unit = rough / power;
+  const nice = unit <= 1 ? 1 : unit <= 2 ? 2 : unit <= 2.5 ? 2.5 : unit <= 5 ? 5 : 10;
+  return nice * power;
+};
+
+// Fewest decimals that show a tick step exactly
+const decimalsFor = (step) =>
+  [0, 1, 2, 3].find(d => Math.abs(Math.round(step * 10 ** d) - step * 10 ** d) < 1e-9) ?? 3;
 
 const StiffnessCurveChart = ({ data = [] }) => {
   const canvasRef = useRef(null);
+  const colors = useThemeColors();
 
   useEffect(() => {
     if (!data || data.length === 0) return;
 
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
+    const ctx = setupCanvas(canvasRef.current, WIDTH, HEIGHT);
+    const chartWidth = WIDTH - PADDING.left - PADDING.right;
+    const chartHeight = HEIGHT - PADDING.top - PADDING.bottom;
+    const bottom = PADDING.top + chartHeight;
 
-    // Padding and chart dimensions
-    const padding = { top: 40, right: 40, bottom: 60, left: 70 };
-    const chartWidth = width - padding.left - padding.right;
-    const chartHeight = height - padding.top - padding.bottom;
-
-    // Clear canvas
-    ctx.clearRect(0, 0, width, height);
-
-    // Find min/max values
     const xValues = data.map(d => d.x);
-    const yValues = data.map(d => d.y);
     const xMin = Math.min(...xValues);
     const xMax = Math.max(...xValues);
-    const yMin = 0; // Start from 0 for constriction
-    const yMax = Math.max(...yValues) * 1.1; // Add 10% padding
+    const yPeak = Math.max(...data.map(d => d.y));
+    const yStep = yPeak > 0 ? niceStep(yPeak / 5) : 0.2;
+    const yMax = yPeak > 0 ? Math.ceil(yPeak / yStep) * yStep : 1;
 
-    // Scale functions
-    const scaleX = (x) => padding.left + ((x - xMin) / (xMax - xMin)) * chartWidth;
-    const scaleY = (y) => padding.top + chartHeight - ((y - yMin) / (yMax - yMin)) * chartHeight;
+    const scaleX = (x) => PADDING.left + ((x - xMin) / (xMax - xMin || 1)) * chartWidth;
+    const scaleY = (y) => bottom - (y / yMax) * chartHeight;
 
-    // Draw axes
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(padding.left, padding.top);
-    ctx.lineTo(padding.left, padding.top + chartHeight);
-    ctx.lineTo(padding.left + chartWidth, padding.top + chartHeight);
-    ctx.stroke();
+    ctx.font = `14px ${FONT_FAMILY}`;
+    ctx.fillStyle = colors.muted;
 
-    // Draw grid lines
-    ctx.strokeStyle = '#e0e0e0';
+    // Horizontal grid lines and y labels
+    ctx.strokeStyle = colors.line;
     ctx.lineWidth = 1;
-
-    // Vertical grid lines (x-axis)
-    const numXTicks = 5;
-    for (let i = 0; i <= numXTicks; i++) {
-      const x = padding.left + (chartWidth / numXTicks) * i;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    const decimals = decimalsFor(yStep);
+    for (let y = 0; y <= yMax + yStep / 2; y += yStep) {
+      const py = Math.round(scaleY(y)) + 0.5;
       ctx.beginPath();
-      ctx.moveTo(x, padding.top);
-      ctx.lineTo(x, padding.top + chartHeight);
+      ctx.moveTo(PADDING.left, py);
+      ctx.lineTo(PADDING.left + chartWidth, py);
       ctx.stroke();
+      ctx.fillText(y.toFixed(decimals), PADDING.left - 10, py);
     }
 
-    // Horizontal grid lines (y-axis)
-    const numYTicks = 5;
-    for (let i = 0; i <= numYTicks; i++) {
-      const y = padding.top + (chartHeight / numYTicks) * i;
-      ctx.beginPath();
-      ctx.moveTo(padding.left, y);
-      ctx.lineTo(padding.left + chartWidth, y);
-      ctx.stroke();
+    // x labels at each stiffness that was run
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (const x of xValues) {
+      ctx.fillText(String(x), scaleX(x), bottom + 10);
     }
 
-    // Draw data points and line
-    ctx.strokeStyle = '#3b82f6';
-    ctx.lineWidth = 2;
+    // Axis titles
+    ctx.fillStyle = colors.text;
+    ctx.font = `15px ${FONT_FAMILY}`;
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('Stiffness (k)', PADDING.left + chartWidth / 2, HEIGHT - 4);
+
+    ctx.save();
+    ctx.translate(18, PADDING.top + chartHeight / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Lumen constriction (%)', 0, 0);
+    ctx.restore();
+
+    // Data line and points
+    ctx.strokeStyle = colors.text;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-
     data.forEach((point, idx) => {
       const x = scaleX(point.x);
       const y = scaleY(point.y);
-
-      if (idx === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
+      if (idx === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
     });
     ctx.stroke();
 
-    // Draw data points as circles
-    ctx.fillStyle = '#3b82f6';
-    data.forEach((point) => {
-      const x = scaleX(point.x);
-      const y = scaleY(point.y);
-
+    ctx.fillStyle = colors.text;
+    for (const point of data) {
       ctx.beginPath();
-      ctx.arc(x, y, 5, 0, 2 * Math.PI);
+      ctx.arc(scaleX(point.x), scaleY(point.y), 3.5, 0, 2 * Math.PI);
       ctx.fill();
-    });
-
-    // Draw axis labels
-    ctx.fillStyle = '#333';
-    ctx.font = '14px sans-serif';
-    ctx.textAlign = 'center';
-
-    // X-axis labels
-    for (let i = 0; i <= numXTicks; i++) {
-      const value = xMin + ((xMax - xMin) / numXTicks) * i;
-      const x = padding.left + (chartWidth / numXTicks) * i;
-      const y = padding.top + chartHeight + 25;
-      ctx.fillText(value.toFixed(0), x, y);
     }
-
-    // Y-axis labels
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-    for (let i = 0; i <= numYTicks; i++) {
-      const value = yMin + ((yMax - yMin) / numYTicks) * i;
-      const x = padding.left - 10;
-      const y = padding.top + chartHeight - (chartHeight / numYTicks) * i;
-      ctx.fillText(value.toFixed(1), x, y);
-    }
-
-    // Draw axis titles
-    ctx.font = 'bold 16px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-
-    // X-axis title
-    ctx.fillText('Stiffness (k)', width / 2, height - 10);
-
-    // Y-axis title (rotated)
-    ctx.save();
-    ctx.translate(15, height / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.fillText('Lumen Constriction (%)', 0, 0);
-    ctx.restore();
-
-    // Chart title
-    ctx.font = 'bold 18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText('Tissue Stiffness vs Airway Constriction', width / 2, 10);
-
-  }, [data]);
+  }, [data, colors]);
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: '20px' }}>
-      <canvas 
-        ref={canvasRef} 
-        width={700} 
-        height={500}
-        style={{ 
-          border: '1px solid #ccc', 
-          borderRadius: '8px',
-          background: 'white',
-          maxWidth: '100%',
-          height: 'auto'
-        }}
-      />
-    </div>
+    <canvas
+      ref={canvasRef}
+      width={WIDTH}
+      height={HEIGHT}
+      role="img"
+      aria-label="Line chart of steady-state lumen constriction against stiffness"
+    />
   );
 };
 
