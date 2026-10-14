@@ -1,50 +1,11 @@
 # Airway Smooth Muscle Contraction Simulator
 
-A browser app that models a cross-section of the airway wall as a mass-spring
-network and shows how far contracting airway smooth muscle (ASM) narrows the
-lumen at different tissue stiffnesses. Everything runs in the browser; there is
-no server.
+An interactive airway-wall model accompanied by [the mechanics notebook](backend/sim.ipynb).
+The browser implements the notebook's final model: a four-layer continuum wall
+with either prescribed activation or Hai–Murphy cross-bridge kinetics. Everything
+runs locally in a browser worker; the app needs no Python server.
 
-## The model
-
-- **Geometry.** The wall is an annulus of point masses in concentric rings
-  (8 radial × 24 circumferential by default), with inner radius 1 and outer
-  radius 2.
-- **Springs.** Circumferential and radial springs have stiffness *k*. Two
-  diagonal springs per element resist shear, at *k*/2.
-- **Muscle.** ASM cells sit in the middle ring. Each one pulls on its neighbour
-  along the current circumferential direction with a constant force, which
-  shortens the ring.
-- **Boundary.** The outer ring is fixed, standing in for the tissue around the
-  airway.
-- **Integration.** Damped Verlet with 5 substeps per step. A run stops once no
-  node moves more than 1e-8 in a substep.
-- **Output.** Lumen constriction is the percentage drop in the area enclosed by
-  the innermost ring (shoelace formula).
-
-All quantities are dimensionless, and the parameters are not fitted to tissue
-data.
-
-## What it shows, and what it doesn't yet
-
-Every spring has the same stiffness, and the cells pull with the same force
-whatever the stiffness. So the steady-state narrowing is set by the ratio of
-cell force to stiffness: halve *k* or double the force and the lumen narrows
-about twice as much. At the default settings (*k* = 50, force = 2) the lumen
-narrows by about 1.5%. The result also depends on mesh resolution, because each
-spring keeps the same *k* however short it is.
-
-The mechanobiology is the next step:
-
-- Cells that sense local stiffness and change their force in response.
-- Separate stiffness for the extracellular matrix and the muscle layer, or
-  stiffness gradients and patches.
-- Cross-bridge kinetics for the muscle force, such as the Hai–Murphy
-  latch-bridge model.
-- A layered wall (mucosa, smooth muscle, cartilage, adventitia), as sketched in
-  `backend/sim.ipynb`.
-
-## Running locally
+## Run the app
 
 ```sh
 cd frontend
@@ -52,29 +13,149 @@ npm install
 npm start
 ```
 
-The app opens at http://localhost:3000.
+Select **Reset defaults**, then **Run model**, to reproduce the notebook's
+activation and relaxation protocol. Playback and the time slider use kinetic
+seconds. Use the time-course selector to view lumen narrowing, tension, all four
+cross-bridge states, or the kinase input. **Export JSON** saves the parameters, units,
+convergence diagnostics, populations, and radial profiles for every accepted time.
 
-## Python version
+The airway illustration magnifies radial displacement up to 10× by default, with
+the scale shown below it. One factor applies to the entire run; larger contractions
+use a smaller factor to keep the displayed lumen and layers readable. **View & mesh**
+includes a true-scale option. Tissue textures are illustrative; percentages, plots,
+and exported radii always retain the actual model values.
 
-`backend/simulation.py` is the original NumPy implementation, and
-`frontend/src/simulation.js` ports its physics line for line. The port runs
-until the airway settles instead of for a fixed 1000 steps; at the default
-settings, 1000 steps of the original reach 0.33% constriction against a steady
-state of 1.46%. It also uses a larger time step (0.1 instead of 0.01), which
-reaches the same steady state in far fewer steps.
+Select **Prescribed activation** for a static equilibrium, then open **Tissue
+stiffness** and choose **Compare tissue stiffness** to reproduce the five non-muscle stiffness multipliers. Changing any
+parameter clears previous results and comparisons. Calculations can be cancelled;
+unfinished or geometrically invalid equilibria are never presented as results.
 
-`backend/app.py` serves the Python model through a small Flask API
-(`POST /api/simulate`, `GET /api/parameters`). The web app no longer uses it.
+## Shared model
+
+- **Geometry:** inner radius 1, outer radius 2, with tissue interfaces at 1.2,
+  1.5, and 1.8. The default mesh has 20 radial intervals (21 node rings) and 80
+  angular sectors. The outer boundary is fixed; the lumen boundary is free.
+- **Passive wall:** compressible neo-Hookean material in plane strain, Poisson
+  ratio 0.25, bilinear quadrilaterals, and 2×2 Gauss integration. Default moduli
+  are 25, 50, 150, and 75 for mucosa/submucosa, muscle, schematic cartilage, and
+  adventitia. Each layer has an independent control. A separate multiplier
+  scales the three non-muscle moduli while keeping passive muscle stiffness fixed.
+- **Muscle tension:** nominal active tension density is `20 × (AMp + AM)` in
+  kinetic mode, or `20 × activation` in prescribed mode. The scale 20 can be
+  adjusted. Active work is integrated over the muscle layer, not assigned as a
+  fixed force to each mesh node.
+- **Kinetics:** the states are detached dephosphorylated `M`, detached
+  phosphorylated `Mp`, attached phosphorylated `AMp`, and attached latch `AM`.
+  Rates in s⁻¹ are `k2 = k5 = 0.5`, `k3 = 0.4`, `k4 = 0.1`, and `k7 = 0.01`.
+  The prescribed input `k1 = k6` is 0 before 10 s, 0.55 from 10–30 s, 0.10 from
+  30–120 s, then zero. These defaults match notebook section 12.
+- **Coupling:** solve a fresh rotationally symmetric wall equilibrium at each
+  kinetic output time. Require free-node force density below `1e-7`, positive
+  element Jacobians, ordered positive radii, and the fixed outer boundary.
+  Newton iterations have no duration in seconds.
+
+Mechanical geometry, moduli, and tension are **dimensionless and illustrative**.
+The kinetic clock is in seconds. The rate reference is
+[Hai and Murphy (1988), pp. C86–C87](https://doi.org/10.1152/ajpcell.1988.255.1.C86),
+whose rates were fitted to swine carotid muscle. This is not an airway calibration.
+The coupling assumes rapid mechanical equilibration and omits viscous delay,
+strain feedback, and the paper's Huxley force–velocity extension. The symmetric
+branch does not establish stability against asymmetric collapse.
+
+## Browser–Python agreement
+
+The Python reference implementations are [continuum.py](backend/continuum.py)
+and [hai_murphy.py](backend/hai_murphy.py). Their browser counterparts are
+[continuum.js](frontend/src/model/continuum.js) and
+[kinetics.js](frontend/src/model/kinetics.js), coordinated by
+[simulation.js](frontend/src/simulation.js).
+
+The browser integrates one representative angular sector and uses rotational
+symmetry to assemble the full energy, radial gradient/tangent, and two-dimensional
+nodal force density. It uses the same quadrature and constitutive law as Python.
+The kinetic matrix exponential uses uniformization with scaling and squaring;
+it splits at every input switch, including switches absent from the output grid.
+Populations are not clipped or renormalized.
+
+Run the browser parity suite from `frontend/`:
 
 ```sh
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
+npm test
+npm run build
 ```
+
+The tests compare all 11 notebook refinement meshes, all 25 continuum sweep
+cases, and every kinetic population and wall profile in the 993-sample default
+time course. Additional independent Python fixtures cover changed materials,
+geometry, rates, initial populations, and off-grid switches, including energy,
+gradient, tangent, and full nodal force density. Tests also cover isolated
+transitions, zero input/tension, invalid inputs, and failed equilibrium solves.
+
+Reference checks at notebook defaults:
+
+| Experiment | Lumen narrowing |
+|---|---:|
+| Full prescribed activation | 5.350553% |
+| Kinetic peak at 30.5 s | 4.087249% |
+| Kinetic result at 600 s | 0.029795% |
+
+The test tolerances for browser–Python agreement are `2e-12` for kinetic
+fractions, `2e-9` for radii, and `2e-7` percentage points for narrowing. These
+implementation checks are distinct from spatial convergence and biological
+validation. The notebook's accepted working mesh applies to its stated parameter
+grid; custom parameters still require interpretation within the model's limits.
+
+After changing the Python model, rerun the notebook and regenerate the custom
+fixtures from the repository root:
+
+```sh
+python -m backend.export_browser_reference
+```
+
+Fixture source hashes detect changes to the Python reference modules. Saved
+notebook reports, rather than browser-generated values, supply the main regression
+references.
+
+## Companion notebook
+
+From the repository root, using your Python environment:
+
+```sh
+python -m pip install -r backend/requirements-notebook.txt
+python -m jupyterlab backend/sim.ipynb
+python -m unittest backend.test_continuum backend.test_hai_murphy -v
+```
+
+Choose **Restart Kernel and Run All Cells**; the full run takes several minutes.
+All four phases are tracked in [PHASED_CHECKLIST.md](PHASED_CHECKLIST.md).
+
+The notebook first develops a spring network and verifies passive forces,
+shear resistance, prescribed contraction, and layer-specific spring stiffnesses.
+Those sections provide the developmental background. Section 10 saves the legacy
+spring sweep to [phase2_sweep.json](backend/results/phase2_sweep.json).
+
+**Section 11** introduces the continuum formulation used by the browser, defines
+spatial scaling and fixed tissue interfaces, and checks radial, angular, and joint
+refinement. It also revisits the stiffness–activation sweep. Evidence is saved to
+[phase3_mesh_convergence.json](backend/results/phase3_mesh_convergence.json).
+This explicit constitutive change does not establish mesh independence of the
+original spring network.
+
+**Section 12** supplies the browser's kinetic model, rate provenance, protocol,
+and quasistatic coupling. It verifies nonnegativity, conservation, analytic limits,
+published steady-state equations, an independent ODE solver, temporal refinement,
+and selected finer spatial meshes. Trajectories and evidence are saved to
+[phase4_kinetics.json](backend/results/phase4_kinetics.json). The executed notebook
+contains 29 code cells and 11 plots, with 17 standalone Python verification tests.
+
+## Legacy implementation
+
+`backend/simulation.py` retains the original uniform-spring Verlet model.
+`backend/app.py` exposes that legacy model through Flask; it is **not** the
+reference for the current browser app. The app does not call that API.
 
 ## Deployment
 
 `netlify.toml` builds `frontend/` with `npm run build` and publishes
-`frontend/build`.
+`frontend/build`. The worker is bundled as a static asset, so hosting needs no
+simulation service.

@@ -1,298 +1,329 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import GridVisualizer from './GridVisualizer';
-import StiffnessCurveChart from './StiffnessCurveChart';
-import { DEFAULT_PARAMS, describeAirway, runSimulation as simulateAirway } from './simulation';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import GridVisualizer from './GridVisualizer.js';
+import StiffnessCurveChart from './StiffnessCurveChart.js';
+import LineChart from './LineChart.js';
+import { DEFAULT_PARAMS } from './simulation.js';
+import { deformationScale } from './deformation.js';
 import './index.css';
 
-function Slider({ id, label, value, min, max, step, format = String, onChange, disabled }) {
-  return (
-    <div className="control">
-      <label htmlFor={id}>{label}</label>
-      <output htmlFor={id}>{format(value)}</output>
-      <input
-        id={id}
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={e => onChange(Number(e.target.value))}
-        disabled={disabled}
-      />
-    </div>
-  );
+const REPOSITORY = 'https://github.com/egbonjefri/airway_mechanobiology';
+const freshParameters = () => ({ ...DEFAULT_PARAMS, moduli: { ...DEFAULT_PARAMS.moduli } });
+const formatNumber = value => Number(value.toFixed(3)).toString();
+const LAYERS = [
+  { key: 'mucosa', label: 'Mucosa / submucosa', base: 25 },
+  { key: 'muscle', label: 'Smooth muscle', base: 50 },
+  { key: 'cartilage', label: 'Cartilage (schematic)', base: 150 },
+  { key: 'adventitia', label: 'Adventitia', base: 75 },
+];
+
+function Slider({ id, label, value, min, max, step, format = formatNumber, onChange }) {
+  return <div className="control">
+    <label htmlFor={id}>{label}</label><output htmlFor={id}>{format(value)}</output>
+    <input id={id} type="range" min={min} max={max} step={step} value={value}
+      onChange={event => onChange(Number(event.target.value))} />
+  </div>;
+}
+
+function frameAtTime(frames, time) {
+  let low = 0, high = frames.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (frames[middle].time <= time) low = middle; else high = middle - 1;
+  }
+  return low;
 }
 
 function App() {
-  // Simulation parameters
-  const [stiffness, setStiffness] = useState(DEFAULT_PARAMS.stiffness);
-  const [cellForce, setCellForce] = useState(DEFAULT_PARAMS.cell_force);
-  const [numRadial, setNumRadial] = useState(DEFAULT_PARAMS.num_radial);
-  const [numCircum, setNumCircum] = useState(DEFAULT_PARAMS.num_circum);
-
-  // Simulation results
-  const [simulationData, setSimulationData] = useState(null);
-  const [currentFrame, setCurrentFrame] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  // Batch simulation for curve
+  const [parameters, setParameters] = useState(freshParameters);
+  const [mode, setMode] = useState('kinetic');
+  const [simulation, setSimulation] = useState(null);
   const [curve, setCurve] = useState(null);
-  const [isGeneratingCurve, setIsGeneratingCurve] = useState(false);
-  const [curveProgress, setCurveProgress] = useState(0);
+  const [currentFrame, setCurrentFrame] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(30);
+  const [showMesh, setShowMesh] = useState(false);
+  const [trueScale, setTrueScale] = useState(false);
+  const [plot, setPlot] = useState('narrowing');
+  const [task, setTask] = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const workerRef = useRef(null);
+  const runId = useRef(0);
+  const frameRef = useRef(0);
+  frameRef.current = currentFrame;
+  const busy = task !== null;
 
-  // The undeformed airway, drawn until a simulation has run
-  const preview = useMemo(
-    () => describeAirway({ num_radial: numRadial, num_circum: numCircum }),
-    [numRadial, numCircum]
-  );
-
-  // A result only describes the parameters it was run with, so clear it when they change
+  useEffect(() => () => workerRef.current?.terminate(), []);
   useEffect(() => {
-    setSimulationData(null);
-    setIsPlaying(false);
-    setCurrentFrame(0);
-  }, [stiffness, cellForce, numRadial, numCircum]);
+    if (!playing || simulation?.mode !== 'kinetic') return undefined;
+    let handle, start;
+    const initialTime = simulation.frames[frameRef.current].time;
+    const endTime = simulation.frames.at(-1).time;
+    const tick = timestamp => {
+      if (start === undefined) start = timestamp;
+      const time = Math.min(endTime, initialTime + (timestamp - start) * speed / 1000);
+      setCurrentFrame(frameAtTime(simulation.frames, time));
+      if (time >= endTime) setPlaying(false); else handle = requestAnimationFrame(tick);
+    };
+    handle = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(handle);
+  }, [playing, simulation, speed]);
 
-  // Animation playback
-  useEffect(() => {
-    if (isPlaying && simulationData) {
-      const interval = setInterval(() => {
-        setCurrentFrame(prev => {
-          if (prev >= simulationData.positions.length - 1) {
-            setIsPlaying(false);
-            return prev;
-          }
-          return prev + 1;
-        });
-      }, 50); // 20 fps
+  const clearResults = () => {
+    setSimulation(null); setCurve(null); setPlaying(false); setCurrentFrame(0); setError(''); setNotice('');
+  };
+  const change = (key, value) => {
+    setParameters(previous => ({ ...previous, [key]: value })); clearResults();
+  };
+  const changeLayer = (key, value) => {
+    setParameters(previous => ({ ...previous, moduli: { ...previous.moduli, [key]: value } })); clearResults();
+  };
+  const selectMode = next => { setMode(next); clearResults(); };
+  const restoreDefaults = () => {
+    setParameters(freshParameters()); setMode('kinetic'); setShowMesh(false); setTrueScale(false); setPlot('narrowing'); clearResults();
+  };
 
-      return () => clearInterval(interval);
-    }
-  }, [isPlaying, simulationData]);
-
-  const runSimulation = async () => {
-    setLoading(true);
+  const calculate = type => {
+    const id = ++runId.current;
+    setTask(type); setProgress(0); setPlaying(false); setError(''); setNotice('');
+    if (type === 'sweep') setCurve(null); else { setSimulation(null); setCurrentFrame(0); }
+    workerRef.current?.terminate();
     try {
-      const data = await simulateAirway({
-        stiffness,
-        cell_force: cellForce,
-        num_radial: numRadial,
-        num_circum: numCircum
-      });
-
-      setSimulationData(data);
-      setCurrentFrame(0);
-      setIsPlaying(true);
-    } catch (error) {
-      console.error('Error running simulation:', error);
-      alert('Failed to run simulation.');
-    } finally {
-      setLoading(false);
+      const worker = new Worker(new URL('./simulation.worker.js', import.meta.url));
+      workerRef.current = worker;
+      const finish = () => { worker.terminate(); workerRef.current = null; setTask(null); };
+      worker.onmessage = ({ data }) => {
+        if (data.id !== runId.current) return;
+        if (data.type === 'progress') { setProgress(data.progress); return; }
+        if (data.type === 'error') setError(data.message);
+        else if (type === 'sweep') setCurve(data.result);
+        else {
+          setSimulation(data.result); setCurrentFrame(0);
+          setPlaying(data.result.mode === 'kinetic' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        }
+        finish();
+      };
+      worker.onerror = event => {
+        if (id !== runId.current) return;
+        setError(event.message || 'The calculation could not finish. Try resetting the defaults.'); finish();
+      };
+      worker.postMessage({ id, type, parameters, mode });
+    } catch (problem) {
+      workerRef.current?.terminate(); workerRef.current = null; setTask(null); setError(problem.message);
     }
   };
-
-  const generateCurve = async () => {
-    setIsGeneratingCurve(true);
-    setCurveProgress(0);
-    try {
-      // Generate stiffness values from 10 to 100
-      const stiffnesses = Array.from({ length: 10 }, (_, i) => 10 + i * 10);
-      const points = [];
-
-      for (const k of stiffnesses) {
-        const data = await simulateAirway({
-          stiffness: k,
-          cell_force: cellForce,
-          num_radial: numRadial,
-          num_circum: numCircum
-        }, { keepFrames: false });
-
-        points.push({ x: k, y: data.final_constriction });
-        setCurveProgress(points.length);
-      }
-
-      setCurve({ points, cellForce, numRadial, numCircum });
-    } catch (error) {
-      console.error('Error generating curve:', error);
-      alert('Failed to generate curve.');
-    } finally {
-      setIsGeneratingCurve(false);
-    }
+  const cancel = () => {
+    runId.current++; workerRef.current?.terminate(); workerRef.current = null;
+    setTask(null); setNotice('Calculation cancelled.');
+  };
+  const download = () => {
+    const blob = new Blob([JSON.stringify({ ...simulation, stiffnessSweep: curve }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = `airway-${simulation.mode}.json`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const togglePlayback = () => {
-    if (currentFrame >= simulationData.positions.length - 1) {
-      setCurrentFrame(0);
-    }
-    setIsPlaying(!isPlaying);
+  const referenceRadii = useMemo(() => Array.from({ length: parameters.radialIntervals + 1 },
+    (_, i) => parameters.innerRadius + (parameters.outerRadius - parameters.innerRadius) * i / parameters.radialIntervals),
+  [parameters.radialIntervals, parameters.innerRadius, parameters.outerRadius]);
+  const selected = simulation?.frames[Math.min(currentFrame, simulation.frames.length - 1)];
+  const magnification = useMemo(() => trueScale ? 1
+    : deformationScale(simulation?.referenceRadii || referenceRadii, simulation?.frames),
+  [trueScale, simulation, referenceRadii]);
+  const timeSeries = useMemo(() => {
+    if (simulation?.mode !== 'kinetic') return null;
+    const { frames, protocol } = simulation;
+    const series = (label, color, key, dashed = false) => ({ label, color, dashed,
+      points: frames.map(frame => ({ x: frame.time, y: typeof key === 'function' ? key(frame) : frame[key] })) });
+    const inputPoints = [];
+    protocol.switchTimes.forEach((t, i) => {
+      if (i) inputPoints.push({ x: t, y: protocol.kinaseRates[i - 1] });
+      inputPoints.push({ x: t, y: protocol.kinaseRates[i] });
+    });
+    inputPoints.push({ x: 600, y: 0 });
+    return {
+      narrowing: [series('Narrowing', 'var(--cell)', 'narrowingPercent')],
+      tension: [series('Total', 'var(--text)', 'tensionDensity'),
+        series('AMp contribution', 'var(--muscle)', f => simulation.parameters.tensionScale * f.states[2], true),
+        series('Latch contribution', 'var(--latch)', f => simulation.parameters.tensionScale * f.states[3], true)],
+      states: [series('M · detached', 'var(--muted)', f => f.states[0]),
+        series('Mp · phosphorylated', 'var(--phosphorylated)', f => f.states[1]),
+        series('AMp · attached', 'var(--muscle)', f => f.states[2]),
+        series('AM · latch', 'var(--latch)', f => f.states[3])],
+      input: [{ label: 'k₁ = k₆', color: 'var(--kinase)', points: inputPoints }],
+    };
+  }, [simulation]);
+  const plots = {
+    narrowing: { title: 'Lumen narrowing', yLabel: 'Narrowing (%)' },
+    tension: { title: 'Muscle tension', yLabel: 'Tension density' },
+    states: { title: 'Cross-bridges', yLabel: 'Population fraction', yLimit: 1 },
+    input: { title: 'Kinase input', yLabel: 'Rate (s⁻¹)' },
   };
 
-  const resetSimulation = () => {
-    setCurrentFrame(0);
-    setIsPlaying(false);
-  };
+  return <main className="app">
+    <header>
+      <h1>Airway smooth muscle contraction</h1>
+      <p className="byline">By <a href="https://egbonjefri.github.io/">Jeffery Osagie</a>{' · '}
+        <a href={`${REPOSITORY}/blob/main/backend/sim.ipynb`}>Notebook</a>{' · '}
+        <a href={REPOSITORY}>Source</a></p>
+    </header>
 
-  const busy = loading || isGeneratingCurve;
-  const mesh = simulationData ?? preview;
-  const lastFrame = mesh.positions.length - 1;
-  const frame = Math.min(currentFrame, lastFrame);
+    <div className="workspace">
+      <section className="figure" aria-label="Airway geometry and current result">
+        <GridVisualizer radii={selected?.radii || referenceRadii} referenceRadii={simulation?.referenceRadii || referenceRadii}
+          sectors={parameters.sectors} narrowing={selected?.narrowingPercent ?? null} showMesh={showMesh} magnification={magnification} />
+        <ul className="legend">{LAYERS.map(layer => <li key={layer.key}>
+          <span className="swatch" style={{ background: `var(--${layer.key})` }} aria-hidden="true" />{layer.label}</li>)}</ul>
+        <p className="figure-caption">{magnification === 1 ? 'True scale' : `Deformation ×${magnification}`}
+          {selected && ' · dashed: resting lumen'}</p>
 
-  return (
-    <main className="app">
-      <header>
-        <h1>Airway smooth muscle contraction simulator</h1>
-        <p className="lede">
-          A cross-section of the airway wall modelled as a mass-spring network.
-          Smooth muscle cells in the middle ring pull along the circumference,
-          the outer ring is held fixed, and the simulation runs until the wall
-          stops moving.
-        </p>
-        <p className="byline">
-          By <a href="https://egbonjefri.github.io/">Jeffery Osagie</a>
-          {' · '}
-          <a href="https://github.com/egbonjefri/airway_mechanobiology">Source on GitHub</a>
-        </p>
-      </header>
-
-      <div className="workspace">
-        <div className="figure">
-          <GridVisualizer
-            positions={mesh.positions[frame]}
-            springs={mesh.springs}
-            cells={mesh.cells}
-            fixedIndices={mesh.fixed_indices}
-            numCircum={mesh.num_circum}
-          />
-          <ul className="legend">
-            <li><span className="swatch swatch-cell" aria-hidden="true" />Smooth muscle cells</li>
-            <li><span className="swatch swatch-fixed" aria-hidden="true" />Fixed outer ring</li>
-            <li><span className="swatch swatch-lumen" aria-hidden="true" />Lumen</li>
-          </ul>
-
-          {simulationData && (
-            <div className="playback">
-              <button type="button" className="secondary" onClick={togglePlayback}>
-                {isPlaying ? 'Pause' : 'Play'}
-              </button>
-              <button type="button" className="secondary" onClick={resetSimulation}>Reset</button>
-              <input
-                type="range"
-                aria-label="Frame"
-                min="0"
-                max={lastFrame}
-                value={frame}
-                onChange={e => {
-                  setIsPlaying(false);
-                  setCurrentFrame(Number(e.target.value));
-                }}
-              />
-              <output>Frame {frame} / {lastFrame}</output>
-            </div>
-          )}
-        </div>
-
-        <div className="panel">
-          <h2>Parameters</h2>
-          <Slider
-            id="stiffness"
-            label={<>Stiffness <i>k</i></>}
-            value={stiffness}
-            min="10"
-            max="100"
-            step="5"
-            onChange={setStiffness}
-            disabled={busy}
-          />
-          <Slider
-            id="cell-force"
-            label="Cell force"
-            value={cellForce}
-            min="0.5"
-            max="5"
-            step="0.5"
-            format={v => v.toFixed(1)}
-            onChange={setCellForce}
-            disabled={busy}
-          />
-          <Slider
-            id="num-radial"
-            label="Rings"
-            value={numRadial}
-            min="5"
-            max="12"
-            step="1"
-            onChange={setNumRadial}
-            disabled={busy}
-          />
-          <Slider
-            id="num-circum"
-            label="Nodes per ring"
-            value={numCircum}
-            min="12"
-            max="48"
-            step="4"
-            onChange={setNumCircum}
-            disabled={busy}
-          />
-
-          <div className="buttons">
-            <button type="button" onClick={runSimulation} disabled={busy}>
-              {loading ? 'Running…' : 'Run simulation'}
-            </button>
-            <button type="button" className="secondary" onClick={generateCurve} disabled={busy}>
-              {isGeneratingCurve ? `Generating… (${curveProgress}/10)` : 'Generate stiffness curve'}
-            </button>
+        {simulation?.mode === 'kinetic' && <>
+          <div className="playback">
+            <button type="button" className="secondary" onClick={() => {
+              if (currentFrame === simulation.frames.length - 1) { frameRef.current = 0; setCurrentFrame(0); }
+              setPlaying(value => !value);
+            }}>{playing ? 'Pause' : currentFrame === simulation.frames.length - 1 ? 'Replay' : 'Play'}</button>
+            <button type="button" className="secondary" onClick={() => { setPlaying(false); setCurrentFrame(0); }}>To start</button>
+            <label htmlFor="playback-speed">Speed</label>
+            <select id="playback-speed" value={speed} onChange={event => setSpeed(Number(event.target.value))}>
+              {[10, 30, 60].map(value => <option key={value} value={value}>{value}×</option>)}
+            </select>
           </div>
+          <div className="time-scrubber">
+            <label htmlFor="kinetic-time">Time</label>
+            <output htmlFor="kinetic-time">{selected.time.toFixed(2)} s / 600 s</output>
+            <input id="kinetic-time" type="range" min={0} max={simulation.frames.length - 1} value={currentFrame}
+              aria-valuetext={`${selected.time.toFixed(2)} seconds`} onChange={event => { setPlaying(false); setCurrentFrame(Number(event.target.value)); }} />
+          </div>
+        </>}
+        {selected ? <>
+          {mode === 'kinetic' && <p className="result-summary">Peak narrowing <strong>{simulation.summary.peakNarrowing.toFixed(3)}%</strong> at{' '}
+            {simulation.summary.peakTime.toFixed(2)} s. At 600 s: {simulation.summary.finalNarrowing.toFixed(3)}%.</p>}
+          <div className="result-actions">
+            <details className="diagnostics">
+              <summary>Result details</summary>
+              <dl className="results" aria-label="Selected result">
+                <div><dt>Active tension density</dt><dd>{selected.tensionDensity.toFixed(3)}</dd></div>
+                {mode === 'kinetic' && <>
+                  <div><dt>Attached (AMp + AM)</dt><dd>{(100 * selected.attachedFraction).toFixed(2)}%</dd></div>
+                  <div><dt>Phosphorylated (Mp + AMp)</dt><dd>{(100 * selected.phosphorylation).toFixed(2)}%</dd></div>
+                </>}
+                <div><dt>Lumen area</dt><dd>{selected.lumenArea.toFixed(5)}</dd></div>
+                <div><dt>Accepted equilibria</dt><dd>{simulation.frames.length}</dd></div>
+                <div><dt>Maximum force density</dt><dd>{simulation.summary.maxResidualDensity.toExponential(2)}</dd></div>
+                <div><dt>Force tolerance</dt><dd>1e−7</dd></div>
+              </dl>
+            </details>
+            <button type="button" className="secondary download" onClick={download}>Export JSON</button>
+          </div>
+        </> : null}
+      </section>
 
-          {simulationData ? (
-            <dl className="results">
-              <div>
-                <dt>Lumen constriction</dt>
-                <dd>{simulationData.constriction[frame].toFixed(2)}%</dd>
-              </div>
-              <div>
-                <dt>At steady state</dt>
-                <dd>
-                  {simulationData.final_constriction.toFixed(2)}%
-                  {!simulationData.settled && ' (not settled)'}
-                </dd>
-              </div>
-              <div>
-                <dt>Steps to settle</dt>
-                <dd>{simulationData.steps}</dd>
-              </div>
-              <div>
-                <dt>Starting lumen area</dt>
-                <dd>{simulationData.initial_area.toFixed(3)}</dd>
-              </div>
-              <div>
-                <dt>Masses, springs, muscle cells</dt>
-                <dd>
-                  {simulationData.num_masses}, {simulationData.springs.length}, {simulationData.cells.length}
-                </dd>
-              </div>
-            </dl>
-          ) : (
-            <p className="note">Run the simulation to watch the wall contract.</p>
-          )}
+      <section className="panel" aria-label="Simulation controls">
+        <div className="run-bar">
+          <label htmlFor="experiment-mode" className="sr-only">Experiment</label>
+          <select id="experiment-mode" value={mode} disabled={busy} onChange={event => selectMode(event.target.value)}>
+            <option value="kinetic">Activation & relaxation</option>
+            <option value="prescribed">Prescribed activation</option>
+          </select>
+          <button type="button" disabled={busy} onClick={() => calculate('simulation')}>{task === 'simulation' ? `Running… ${Math.round(progress * 100)}%` : 'Run model'}</button>
         </div>
+        {busy && <progress value={progress} max={1} aria-label="Calculation progress" />}
+        <p className="status" role="status">{notice}</p>
+        {error && <p className="error" role="alert">{error}</p>}
+        <fieldset disabled={busy}>
+          <div className="primary-control">
+            {mode === 'kinetic'
+              ? <Slider id="peak-kinase" label="Initial kinase rate (s⁻¹)" value={parameters.peakKinase} min={0} max={1} step={.05} onChange={value => change('peakKinase', value)} />
+              : <Slider id="activation" label="Prescribed activation" value={parameters.activation} min={0} max={1} step={.05} format={value => `${(100 * value).toFixed(0)}%`} onChange={value => change('activation', value)} />}
+          </div>
+          <details className="settings-group">
+            <summary>{mode === 'kinetic' ? 'Activation settings' : 'Muscle settings'}</summary>
+            {mode === 'kinetic' && <p className="note">Initial kinase input: 10–30 s.</p>}
+            <div className="control-grid">
+              {mode === 'kinetic' && <>
+                <Slider id="sustained-kinase" label="Kinase, 30 s–off (s⁻¹)" value={parameters.sustainedKinase} min={0} max={.5} step={.01} onChange={value => change('sustainedKinase', value)} />
+                <Slider id="withdrawal-time" label="Kinase off (s)" value={parameters.withdrawalTime} min={40} max={300} step={10} onChange={value => change('withdrawalTime', value)} />
+                <Slider id="latch-detachment" label="Latch detachment (s⁻¹)" value={parameters.latchDetachment} min={.005} max={.1} step={.005}
+                  format={value => value.toFixed(3)} onChange={value => change('latchDetachment', value)} />
+              </>}
+              <Slider id="tension-scale" label="Max. tension density" value={parameters.tensionScale} min={0} max={20} step={1} onChange={value => change('tensionScale', value)} />
+            </div>
+            {mode === 'kinetic' && <p className="note">Fixed rates (s⁻¹): k₂ = k₅ = 0.5, k₃ = 0.4, k₄ = 0.1.</p>}
+          </details>
+          <details className="settings-group">
+            <summary>Tissue stiffness</summary>
+            <div className="control-grid tissue-controls">
+              {LAYERS.map(layer => <Slider key={layer.key} id={`modulus-${layer.key}`} label={layer.label} value={parameters.moduli[layer.key]}
+                min={layer.base/4} max={layer.base*4} step={layer.base/4} onChange={value => changeLayer(layer.key, value)} />)}
+            </div>
+            <div className="multiplier-control">
+              <Slider id="non-muscle-multiplier" label="Non-muscle multiplier" value={parameters.nonMuscleMultiplier} min={.25} max={4} step={.25}
+                format={value => `${formatNumber(value)}×`} onChange={value => change('nonMuscleMultiplier', value)} />
+            </div>
+            <p className="note">Wall quantities are dimensionless.</p>
+            {mode === 'prescribed' && <button type="button" className="secondary compare-button" onClick={() => calculate('sweep')}>
+              {task === 'sweep' ? `Comparing… ${Math.round(progress * 100)}%` : 'Compare tissue stiffness'}</button>}
+          </details>
+          <details className="settings-group mesh-settings">
+            <summary>View & mesh</summary>
+            <label className="checkbox-control"><input id="true-scale" type="checkbox" checked={trueScale} onChange={event => setTrueScale(event.target.checked)} />True-scale deformation</label>
+            <label className="checkbox-control"><input id="show-mesh" type="checkbox" checked={showMesh} onChange={event => setShowMesh(event.target.checked)} />Show mesh</label>
+            <div className="select-control"><label htmlFor="radial-intervals">Radial intervals</label>
+              <select id="radial-intervals" value={parameters.radialIntervals} onChange={event => change('radialIntervals', Number(event.target.value))}>
+                {[10, 20, 40].map(value => <option key={value} value={value}>{value} intervals ({value + 1} rings)</option>)}
+              </select></div>
+            <div className="select-control"><label htmlFor="sectors">Angular sectors</label>
+              <select id="sectors" value={parameters.sectors} onChange={event => change('sectors', Number(event.target.value))}>
+                {[40, 80, 160].map(value => <option key={value} value={value}>{value}</option>)}
+              </select></div>
+            <p className="note">Layer interfaces: r = 1.2, 1.5, 1.8.</p>
+          </details>
+        </fieldset>
+        <div className="panel-utility">
+          {busy ? <button type="button" className="text-button" onClick={cancel}>Cancel</button>
+            : <button type="button" className="text-button" onClick={restoreDefaults}>Reset defaults</button>}
+        </div>
+      </section>
+    </div>
+
+    {timeSeries && <section className="curve" aria-labelledby="time-course-heading">
+      <div className="chart-toolbar">
+        <h2 id="time-course-heading">Time course</h2>
+        <label htmlFor="time-course-plot" className="sr-only">Time-course plot</label>
+        <select id="time-course-plot" value={plot} onChange={event => setPlot(event.target.value)}>
+          {Object.entries(plots).map(([key, { title }]) => <option key={key} value={key}>{title}</option>)}
+        </select>
       </div>
+      <LineChart {...plots[plot]} series={timeSeries[plot]} xLabel="Time (s)" cursor={selected.time} showTitle={false} />
+    </section>}
 
-      {curve && (
-        <section className="curve" aria-labelledby="curve-heading">
-          <h2 id="curve-heading">Stiffness and constriction</h2>
-          <StiffnessCurveChart data={curve.points} />
-          <p className="note">
-            Each point is a separate run with cell force {curve.cellForce.toFixed(1)},{' '}
-            {curve.numRadial} rings and {curve.numCircum} nodes per ring. Every
-            spring has the same stiffness and the cells pull with the same force
-            whatever it is, so narrowing here scales with cell force ÷ stiffness.
-          </p>
-        </section>
-      )}
-    </main>
-  );
+    {curve && <section className="curve" aria-label="Tissue stiffness comparison">
+      <StiffnessCurveChart data={curve.points} />
+      <p className="note">{(100 * curve.parameters.activation).toFixed(0)}% activation · muscle modulus {formatNumber(curve.parameters.moduli.muscle)} ·
+        maximum tension density {formatNumber(curve.parameters.tensionScale)}</p>
+      <details className="sweep-values">
+        <summary>View values</summary>
+        <table className="sweep-table">
+          <thead><tr><th scope="col">Non-muscle multiplier</th><th scope="col">Narrowing</th></tr></thead>
+          <tbody>{curve.points.map(point => <tr key={point.x}><th scope="row">{point.x}×</th><td>{point.y.toFixed(3)}%</td></tr>)}</tbody>
+        </table>
+      </details>
+    </section>}
+
+    <details className="model-notes">
+      <summary>Model assumptions</summary>
+      <p>Radial motion is magnified up to 10× to make small deformations visible. The scale shown below the diagram
+        stays fixed throughout each run and is reduced for large contractions. Percentages, plots, and exported
+        radii use the actual model results. Tissue textures are illustrative.</p>
+      <p>Axisymmetric, compressible neo-Hookean wall in plane strain; fixed outer boundary; Poisson ratio 0.25.
+        Circumferential tension is proportional to attached cross-bridges (AMp + AM).
+        Each time point is a static wall equilibrium.</p>
+      <p><a href="https://doi.org/10.1152/ajpcell.1988.255.1.C86">Hai–Murphy kinetics</a> use rates fitted to swine carotid muscle.
+        Parameters are illustrative, without airway calibration. No viscous delay, strain feedback,
+        shortening-velocity law, or asymmetric collapse is represented. The 600 s endpoint is not a steady-state limit.</p>
+    </details>
+  </main>;
 }
-
 export default App;

@@ -7,11 +7,16 @@ const readColors = () => {
   const style = getComputedStyle(document.documentElement);
   const read = (name) => style.getPropertyValue(name).trim();
   return {
+    background: read('--bg'),
     text: read('--text'),
     muted: read('--muted'),
     line: read('--line'),
     node: read('--node'),
     cell: read('--cell'),
+    mucosa: read('--mucosa'),
+    muscle: read('--muscle'),
+    cartilage: read('--cartilage'),
+    adventitia: read('--adventitia'),
   };
 };
 
