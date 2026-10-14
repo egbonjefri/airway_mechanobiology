@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Builds and caches
+build/
+coverage/
+__pycache__/
+.ipynb_checkpoints/
+.netlify/
+
+# Local environment files
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+
+# Published paper kept for reference; not ours to redistribute
+hai1988.pdf
