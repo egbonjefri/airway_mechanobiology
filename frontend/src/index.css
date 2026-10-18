@@ -356,6 +356,7 @@ progress { display: block; width: 100%; height: .4rem; margin-top: 1rem; accent-
 .playback label { font-size: .95rem; margin-left: auto; }
 .result-summary { font-size: 1rem; margin: .75rem 0; }
 .result-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .75rem; align-items: start; margin-top: .75rem; }
+.action-buttons { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: flex-end; }
 .diagnostics summary { padding: .4rem 0; }
 .diagnostics .results { margin: .25rem 0 0; }
 .diagnostics .results dt, .diagnostics .results dd { font-size: .9rem; }
@@ -364,15 +365,17 @@ progress { display: block; width: 100%; height: .4rem; margin-top: 1rem; accent-
 .chart-toolbar h2 { margin: 0; }
 .line-chart { margin: 0; min-width: 0; }
 .line-chart figcaption { font-size: 1.1rem; font-weight: 600; margin: 0 0 .65rem; }
-.line-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.line-chart svg { display: block; width: 100%; height: auto; overflow: visible; user-select: none; touch-action: pan-y; }
 .chart-tick { fill: var(--muted); font-size: 15px; }
 .chart-label { fill: var(--text); font-size: 16px; }
 .chart-axis { stroke: var(--text); stroke-width: 1; }
+.chart-zero { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 2; }
+.chart-marker { stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 4; }
 .chart-cursor { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; }
 .chart-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: .2rem 1rem; margin: .4rem 0 0; padding: 0; list-style: none; font-size: .9rem; color: var(--muted); }
 .chart-legend li { display: flex; align-items: center; gap: .35rem; }
 .chart-legend span { width: .85rem; height: 2px; }
-.sweep-table { width: 100%; max-width: 36rem; border-collapse: collapse; margin: 1rem 0; font-size: 1rem; }
+.sweep-table { width: 100%; max-width: 44rem; border-collapse: collapse; margin: 1rem 0; font-size: .95rem; }
 .sweep-values { margin-top: .75rem; }
 .sweep-table th, .sweep-table td { text-align: right; padding: .4rem .65rem; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .sweep-table th:first-child { text-align: left; }

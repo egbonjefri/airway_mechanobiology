@@ -35,7 +35,8 @@ function solveTridiagonal(diagonal, offDiagonal, rhs) {
 
 export class ContinuumAirway {
   constructor({ radialIntervals = 20, sectors = 80, innerRadius = 1, outerRadius = 2,
-    moduli = DEFAULT_MODULI, poissonRatio = .25, activeStress = 20, radialTraction = 0 } = {}) {
+    moduli = DEFAULT_MODULI, poissonRatio = .25, activeStress = 20, radialTraction = 0,
+    outerStiffness = null } = {}) {
     if (!Number.isInteger(radialIntervals) || radialIntervals < 10 || radialIntervals % 10) {
       throw new Error('Radial intervals must be a positive multiple of 10 to resolve every tissue interface.');
     }
@@ -44,11 +45,19 @@ export class ContinuumAirway {
       || innerRadius <= 0 || outerRadius <= innerRadius || poissonRatio <= -1 || poissonRatio >= .5 || activeStress < 0) {
       throw new Error('Invalid wall geometry, Poisson ratio, or tension scale.');
     }
+    if (outerStiffness !== null && outerStiffness !== undefined) {
+      if (typeof outerStiffness !== 'number' || !Number.isFinite(outerStiffness) || outerStiffness <= 0) {
+        throw new Error('Outer tethering stiffness must be null or a finite positive number.');
+      }
+    }
     if (!moduli || Object.keys(moduli).length !== 4
       || TISSUES.some(key => !Number.isFinite(moduli[key]) || moduli[key] <= 0)) {
       throw new Error('All four tissue moduli must be finite and positive.');
     }
-    Object.assign(this, { radialIntervals, sectors, innerRadius, outerRadius, poissonRatio, activeStress, radialTraction });
+    Object.assign(this, {
+      radialIntervals, sectors, innerRadius, outerRadius, poissonRatio, activeStress, radialTraction,
+      outerStiffness: outerStiffness === undefined ? null : outerStiffness,
+    });
     this.moduli = { ...moduli };
     this.referenceRadii = Array.from({ length: radialIntervals + 1 }, (_, i) => innerRadius + (outerRadius - innerRadius)*i/radialIntervals);
     const angle = 2 * Math.PI / sectors;
@@ -56,7 +65,9 @@ export class ContinuumAirway {
     this.sin = Math.sin(angle);
     this.initialArea = sectors * this.sin * innerRadius ** 2 / 2;
     this.boundaryLength = 2 * innerRadius * Math.sin(Math.PI / sectors);
+    this.outerLength = 2 * outerRadius * Math.sin(Math.PI / sectors);
     this.nodeAreas = new Float64Array(radialIntervals + 1);
+    this.ringLayers = [];
     this.quadrature = [];
     const q = 1 / Math.sqrt(3);
     const signs = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
@@ -66,6 +77,7 @@ export class ContinuumAirway {
       const nodes = [[r0, 0], [r1, 0], [r1*this.cos, r1*this.sin], [r0*this.cos, r0*this.sin]];
       const fraction = (ring + .5) / radialIntervals;
       const layer = fraction < .2 ? 0 : fraction < .5 ? 1 : fraction < .8 ? 2 : 3;
+      this.ringLayers.push(layer);
       const young = moduli[TISSUES[layer]];
       const mu = young / (2 * (1 + poissonRatio));
       const lame = young * poissonRatio / ((1 + poissonRatio) * (1 - 2 * poissonRatio));
@@ -143,7 +155,16 @@ export class ContinuumAirway {
         }
       }
     }
-    energy = this.sectors * (energy - this.radialTraction*this.boundaryLength*(radii[0] - this.innerRadius));
+    let tetherEnergy = 0;
+    if (this.outerStiffness !== null) {
+      const drOut = radii[n - 1] - this.outerRadius;
+      const tetherForce = this.outerStiffness * this.outerLength * drOut;
+      tetherEnergy = 0.5 * tetherForce * drOut;
+      forces[n - 1][0] -= tetherForce;
+      gradient[n - 1] += tetherForce;
+      if (withTangent) diagonal[n - 1] += this.outerStiffness * this.outerLength;
+    }
+    energy = this.sectors * (energy - this.radialTraction*this.boundaryLength*(radii[0] - this.innerRadius) + tetherEnergy);
     forces[0][0] += this.radialTraction*this.boundaryLength;
     gradient[0] -= this.radialTraction*this.boundaryLength;
     for (let i = 0; i < n; i++) {
@@ -151,9 +172,111 @@ export class ContinuumAirway {
       diagonal[i] *= this.sectors;
       if (i < n - 1) offDiagonal[i] *= this.sectors;
     }
-    const residualDensity = Math.max(...forces.slice(0, -1).map((f, i) => Math.hypot(...f) / this.nodeAreas[i]));
+    const freeForces = this.outerStiffness === null ? forces.slice(0, -1) : forces;
+    const residualDensity = Math.max(...freeForces.map((f, i) => Math.hypot(...f) / this.nodeAreas[i]));
     if (![energy, residualDensity, minimumJacobian].every(Number.isFinite)) throw new Error('Wall calculation produced a non-finite result.');
     return { energy, gradient, diagonal, offDiagonal, forces, residualDensity, minimumJacobian };
+  }
+
+  wallProfile(radii, activation = 1) {
+    if (!Number.isFinite(activation) || activation < 0 || activation > 1) throw new Error('Attachment / activation must be between 0 and 1.');
+    if (!Array.isArray(radii) || radii.length !== this.referenceRadii.length || !ordered(radii)) {
+      throw new Error('Wall radii must be finite, positive, and ordered.');
+    }
+    const ref = this.referenceRadii;
+    const displacement = radii.map((r, i) => r - ref[i]);
+    const nodeHoopStretch = radii.map((r, i) => r / ref[i]);
+    const midpointRadii = [], radialStretch = [], hoopStretch = [], radialStress = [], hoopStress = [], energyDensity = [];
+    let muscleStretchSum = 0, muscleCount = 0;
+    for (let ring = 0; ring < this.radialIntervals; ring++) {
+      const midRef = 0.5 * (ref[ring] + ref[ring + 1]);
+      const midDef = 0.5 * (radii[ring] + radii[ring + 1]);
+      const lr = (radii[ring + 1] - radii[ring]) / (ref[ring + 1] - ref[ring]);
+      const lt = midDef / midRef;
+      const J = lr * lt, logJ = Math.log(J);
+      const layer = this.ringLayers[ring];
+      const young = this.moduli[TISSUES[layer]];
+      const mu = young / (2 * (1 + this.poissonRatio));
+      const lame = young * this.poissonRatio / ((1 + this.poissonRatio) * (1 - 2 * this.poissonRatio));
+      const tension = layer === 1 ? this.activeStress * activation : 0;
+      const pressure = lame * logJ - mu;
+      midpointRadii.push(midRef);
+      radialStretch.push(lr);
+      hoopStretch.push(lt);
+      radialStress.push(mu * lr + pressure / lr);
+      hoopStress.push(mu * lt + pressure / lt + tension);
+      energyDensity.push(0.5 * mu * (lr ** 2 + lt ** 2 - 2) - mu * logJ + 0.5 * lame * logJ ** 2 + tension * (lt - 1));
+      if (layer === 1) { muscleStretchSum += lt; muscleCount++; }
+    }
+    return {
+      referenceRadii: [...ref], radii: [...radii], displacement, nodeHoopStretch,
+      midpointRadii, radialStretch, hoopStretch, radialStress, hoopStress, energyDensity,
+      layerIndices: [...this.ringLayers], muscleStretch: muscleStretchSum / muscleCount,
+    };
+  }
+
+  solveAsymmetric(activation = 1, {
+    cartilageGap = 0, cartilagePlates = 4, mucosalFolding = 0, mucosalFolds = 8,
+    forceDensityTol = 1e-7, maxIterations = 60,
+  } = {}) {
+    if (![cartilageGap, mucosalFolding].every(Number.isFinite)
+      || cartilageGap < 0 || cartilageGap > .85 || mucosalFolding < 0 || mucosalFolding > .8
+      || !Number.isInteger(cartilagePlates) || cartilagePlates < 2
+      || !Number.isInteger(mucosalFolds) || mucosalFolds < 3) {
+      throw new Error('Invalid cartilage segmentation or mucosal folding parameters.');
+    }
+    const base = this.solve(activation, { forceDensityTol, maxIterations });
+    if (cartilageGap === 0 && mucosalFolding === 0) {
+      return { ...base, sectorRadii: Array.from({ length: this.sectors }, () => [...base.radii]) };
+    }
+    const gapModuli = { ...this.moduli, cartilage: this.moduli.cartilage * (1 - cartilageGap) };
+    const gapWall = new ContinuumAirway({
+      radialIntervals: this.radialIntervals, sectors: this.sectors,
+      innerRadius: this.innerRadius, outerRadius: this.outerRadius,
+      moduli: gapModuli, poissonRatio: this.poissonRatio,
+      activeStress: this.activeStress, radialTraction: this.radialTraction,
+      outerStiffness: this.outerStiffness,
+    });
+    const gapSolved = gapWall.solve(activation, { forceDensityTol, maxIterations });
+    if (!gapSolved.converged) throw new Error('Inter-plate wall equilibrium did not converge.');
+    const angles = Array.from({ length: this.sectors }, (_, s) => 2 * Math.PI * s / this.sectors);
+    let sectorRadii = angles.map(theta => {
+      const w = Math.sin(0.5 * cartilagePlates * theta) ** 2;
+      return base.radii.map((r, i) => (1 - w) * r + w * gapSolved.radii[i]);
+    });
+    if (mucosalFolding > 0) {
+      const meanInner = sectorRadii.reduce((sum, row) => sum + row[0], 0) / this.sectors;
+      const meanInward = Math.max(0, this.innerRadius - meanInner);
+      const muscleOuter = this.innerRadius + 0.5 * (this.outerRadius - this.innerRadius);
+      const decay = this.referenceRadii.map(R => Math.max(0, Math.min(1, (muscleOuter - R) / (muscleOuter - this.innerRadius))) ** 2);
+      let minGap = Infinity, minInner = Infinity;
+      for (const row of sectorRadii) {
+        minInner = Math.min(minInner, row[0]);
+        for (let i = 0; i + 1 < row.length; i++) minGap = Math.min(minGap, row[i + 1] - row[i]);
+      }
+      const amp = Math.min(mucosalFolding * meanInward, 0.35 * minGap, 0.4 * minInner);
+      sectorRadii = sectorRadii.map((row, s) => {
+        const wave = Math.cos(mucosalFolds * angles[s]);
+        return row.map((r, i) => r + amp * wave * decay[i]);
+      });
+    }
+    let doubleArea = 0;
+    for (let s = 0; s < this.sectors; s++) {
+      const next = (s + 1) % this.sectors;
+      const r0 = sectorRadii[s][0], r1 = sectorRadii[next][0];
+      const x0 = r0 * Math.cos(angles[s]), y0 = r0 * Math.sin(angles[s]);
+      const x1 = r1 * Math.cos(angles[next]), y1 = r1 * Math.sin(angles[next]);
+      doubleArea += x0 * y1 - x1 * y0;
+    }
+    const lumenArea = 0.5 * doubleArea;
+    const meanRadii = this.referenceRadii.map((_, i) => sectorRadii.reduce((sum, row) => sum + row[i], 0) / this.sectors);
+    return {
+      ...base,
+      radii: meanRadii,
+      sectorRadii,
+      lumenArea,
+      narrowingPercent: 100 * (1 - lumenArea / this.initialArea),
+    };
   }
 
   solve(activation = 1, { forceDensityTol = 1e-7, maxIterations = 60 } = {}) {
@@ -172,7 +295,8 @@ export class ContinuumAirway {
           potential: state.energy, lumenArea, narrowingPercent: 100 * (1 - lumenArea / this.initialArea),
           radii, history };
       }
-      const direction = solveTridiagonal(state.diagonal, state.offDiagonal, state.gradient.slice(0, -1).map(v => -v));
+      const freeGrad = this.outerStiffness === null ? state.gradient.slice(0, -1) : state.gradient;
+      const direction = solveTridiagonal(state.diagonal, state.offDiagonal, Array.from(freeGrad, v => -v));
       const slope = dot(direction, state.gradient);
       let step = 1, accepted = false;
       for (let trialIndex = 0; trialIndex < 40; trialIndex++) {

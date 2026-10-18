@@ -106,12 +106,35 @@ class ContinuumTests(unittest.TestCase):
 
     def test_invalid_geometry_and_configuration(self):
         for kwargs in ({"radial_intervals": 9}, {"sectors": 2}, {"poisson_ratio": 0.5},
-                       {"activation": 2}, {"active_stress": -1}, {"moduli": {"muscle": 50}}):
+                       {"activation": 2}, {"active_stress": -1}, {"moduli": {"muscle": 50}},
+                       {"outer_stiffness": 0}, {"outer_stiffness": -5}):
             with self.assertRaises(ValueError):
                 ContinuumAirway(**kwargs)
         model = ContinuumAirway(10, 20)
         with self.assertRaises(ValueError):
             model.state(model.reference @ np.diag([-1, 1]))
+
+    def test_outer_tethering_and_profile(self):
+        fixed_model = ContinuumAirway(10, 20, activation=1.0)
+        fixed_res = fixed_model.solve()
+        tethered = ContinuumAirway(10, 20, activation=1.0, outer_stiffness=25.0)
+        tethered_res = tethered.solve()
+        self.assertTrue(tethered_res["converged"])
+        self.assertLess(tethered_res["radii"][-1], tethered.outer_radius)
+        self.assertGreater(tethered_res["narrowing_percent"], fixed_res["narrowing_percent"])
+        profile = tethered.wall_profile(tethered_res["radii"])
+        self.assertEqual(len(profile["displacement"]), 11)
+        self.assertEqual(len(profile["hoop_stress"]), 10)
+        self.assertLess(profile["muscle_stretch"], 1.0)
+
+    def test_asymmetric_solver(self):
+        model = ContinuumAirway(10, 24, activation=1.0)
+        sym = model.solve_asymmetric(cartilage_gap=0.0, mucosal_folding=0.0)
+        self.assertAlmostEqual(sym["narrowing_percent"], model.solve()["narrowing_percent"], places=11)
+        asym = model.solve_asymmetric(cartilage_gap=0.5, cartilage_plates=4, mucosal_folding=0.25, mucosal_folds=8)
+        self.assertEqual(asym["sector_radii"].shape, (24, 11))
+        self.assertGreater(asym["narrowing_percent"], sym["narrowing_percent"])
+        self.assertTrue(np.all(np.diff(asym["sector_radii"], axis=1) > 0))
 
 
 if __name__ == "__main__":

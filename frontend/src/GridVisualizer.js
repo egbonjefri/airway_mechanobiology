@@ -57,7 +57,7 @@ function createWarp() {
 
   return {
     canvas,
-    draw(section, reference, displayed, scale) {
+    draw(section, reference, displayed, scale, displayedSectors = null) {
       const pixels = Math.round(SIZE * (window.devicePixelRatio || 1));
       if (canvas.width !== pixels) canvas.width = canvas.height = pixels;
       if (uploaded !== section) {
@@ -81,8 +81,23 @@ function createWarp() {
         indexCount = order.length;
       }
       gl.bindBuffer(gl.ARRAY_BUFFER, positions);
-      gl.bufferData(gl.ARRAY_BUFFER, grid(displayed, (radius, angle) =>
-        polar(scale * radius, angle).map(v => SIZE / 2 + v)), gl.DYNAMIC_DRAW);
+      if (displayedSectors?.length) {
+        const S = displayedSectors.length;
+        const values = new Float32Array(reference.length * (SEGMENTS + 1) * 2);
+        for (let i = 0; i < reference.length; i++) {
+          for (let j = 0; j <= SEGMENTS; j++) {
+            const angle = TAU * j / SEGMENTS;
+            const pos = (j / SEGMENTS) * S;
+            const s0 = Math.floor(pos) % S, s1 = (s0 + 1) % S, w = pos - Math.floor(pos);
+            const r = (1 - w) * displayedSectors[s0][i] + w * displayedSectors[s1][i];
+            values.set(polar(scale * r, angle).map(v => SIZE / 2 + v), 2 * (i * (SEGMENTS + 1) + j));
+          }
+        }
+        gl.bufferData(gl.ARRAY_BUFFER, values, gl.DYNAMIC_DRAW);
+      } else {
+        gl.bufferData(gl.ARRAY_BUFFER, grid(displayed, (radius, angle) =>
+          polar(scale * radius, angle).map(v => SIZE / 2 + v)), gl.DYNAMIC_DRAW);
+      }
       gl.viewport(0, 0, pixels, pixels);
       gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_SHORT, 0);
@@ -95,7 +110,9 @@ function createWarp() {
 let warp;
 const sharedWarp = () => (warp === undefined ? warp = createWarp() : warp);
 
-const GridVisualizer = ({ radii, referenceRadii, sectors = 80, narrowing = null, showMesh = false, magnification = 1 }) => {
+const GridVisualizer = ({
+  radii, referenceRadii, sectorRadii = null, sectors = 80, narrowing = null, showMesh = false, magnification = 1,
+}) => {
   const canvasRef = useRef(null);
   const colors = useThemeColors();
   useEffect(() => {
@@ -104,9 +121,12 @@ const GridVisualizer = ({ radii, referenceRadii, sectors = 80, narrowing = null,
     const center = SIZE / 2;
     const scale = (SIZE / 2 - 24) / referenceRadii.at(-1);
     const displayed = displayRadii(referenceRadii, radii, magnification);
+    const displayedSectors = sectorRadii?.length
+      ? sectorRadii.map(row => displayRadii(referenceRadii, row, magnification))
+      : null;
     const section = sectionFor(referenceRadii[0], referenceRadii.at(-1));
     if (sharedWarp()) {
-      warp.draw(section, referenceRadii, displayed, scale);
+      warp.draw(section, referenceRadii, displayed, scale, displayedSectors);
       ctx.drawImage(warp.canvas, 0, 0, SIZE, SIZE);
       ctx.translate(center, center);
     } else {
@@ -123,8 +143,10 @@ const GridVisualizer = ({ radii, referenceRadii, sectors = 80, narrowing = null,
     }
 
     const point = (r, sector) => polar(scale * r, TAU * sector / sectors);
-    const ring = r => {
+    const ring = (ringIndex, fallbackRadius) => {
       for (let i = 0; i <= sectors; i++) {
+        const s = i % sectors;
+        const r = displayedSectors ? displayedSectors[s % displayedSectors.length][ringIndex] : fallbackRadius;
         const p = point(r, i);
         if (!i) ctx.moveTo(...p); else ctx.lineTo(...p);
       }
@@ -133,12 +155,21 @@ const GridVisualizer = ({ radii, referenceRadii, sectors = 80, narrowing = null,
     if (showMesh) {
       // Q1 element edges; display only, independent of the solver mesh.
       ctx.strokeStyle = colors.text; ctx.lineWidth = .5; ctx.globalAlpha = .35;
-      ctx.beginPath(); displayed.forEach(r => ring(r));
-      for (let i = 0; i < sectors; i++) { ctx.moveTo(...point(displayed[0], i)); ctx.lineTo(...point(displayed.at(-1), i)); }
+      ctx.beginPath(); displayed.forEach((r, idx) => ring(idx, r));
+      for (let i = 0; i < sectors; i++) {
+        const rIn = displayedSectors ? displayedSectors[i % displayedSectors.length][0] : displayed[0];
+        const rOut = displayedSectors ? displayedSectors[i % displayedSectors.length].at(-1) : displayed.at(-1);
+        ctx.moveTo(...point(rIn, i)); ctx.lineTo(...point(rOut, i));
+      }
       ctx.stroke(); ctx.globalAlpha = 1;
     }
     // A narrow halo keeps the reference contour legible over tissue detail.
-    ctx.setLineDash([5, 5]); ctx.beginPath(); ring(referenceRadii[0]);
+    ctx.setLineDash([5, 5]); ctx.beginPath();
+    for (let i = 0; i <= sectors; i++) {
+      const p = point(referenceRadii[0], i);
+      if (!i) ctx.moveTo(...p); else ctx.lineTo(...p);
+    }
+    ctx.closePath();
     ctx.strokeStyle = colors.background; ctx.lineWidth = 3.5; ctx.stroke();
     ctx.strokeStyle = colors.text; ctx.lineWidth = 1.3; ctx.stroke(); ctx.setLineDash([]);
     const labelScale = Math.min(1, displayed[0] / referenceRadii[0] / .6);
@@ -148,8 +179,8 @@ const GridVisualizer = ({ radii, referenceRadii, sectors = 80, narrowing = null,
     ctx.fillStyle = colors.text; ctx.font = `28px ${FONT_FAMILY}`;
     ctx.fillText(narrowing === null ? 'At rest' : `${narrowing.toFixed(3)}%`, 0, 22);
     if (narrowing !== null) { ctx.font = `15px ${FONT_FAMILY}`; ctx.fillStyle = colors.muted; ctx.fillText('actual area reduction', 0, 45); }
-  }, [radii, referenceRadii, sectors, narrowing, colors, showMesh, magnification]);
+  }, [radii, referenceRadii, sectorRadii, sectors, narrowing, colors, showMesh, magnification]);
   return <canvas ref={canvasRef} width={SIZE} height={SIZE} role="img"
-    aria-label={`Airway cross-section with an illustrative stained-tissue texture, fixed outer boundary, radial deformation scale ${magnification} times${narrowing === null ? ', at rest' : `, actual lumen narrowing ${narrowing.toFixed(3)} percent`}`} />;
+    aria-label={`Airway cross-section with an illustrative stained-tissue texture, radial deformation scale ${magnification} times${narrowing === null ? ', at rest' : `, actual lumen narrowing ${narrowing.toFixed(3)} percent`}`} />;
 };
 export default GridVisualizer;

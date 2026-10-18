@@ -139,8 +139,30 @@ def simulate(times, protocol, *, rates=None, initial=None):
     return result
 
 
+def advance_population(state, start_time, end_time, protocol, rates=None):
+    """Advance a four-state population across [start_time, end_time], splitting at protocol switches."""
+    state = validate_populations(state).copy()
+    if state.ndim != 1:
+        raise ValueError("Specify one population vector.")
+    if not np.isfinite([start_time, end_time]).all() or start_time < 0 or end_time < start_time:
+        raise ValueError("Interval times must be finite, nonnegative, and ordered.")
+    if not isinstance(protocol, ActivationProtocol):
+        raise TypeError("protocol must be an ActivationProtocol.")
+    rates = HaiMurphyRates() if rates is None else rates
+    if end_time == start_time:
+        return state
+    switches = [t for t in protocol.switch_times if start_time < t < end_time]
+    knots = [float(start_time), *switches, float(end_time)]
+    for t0, t1 in zip(knots[:-1], knots[1:]):
+        kinase = float(protocol.values(t0))
+        state = expm(rates.generator(kinase) * (t1 - t0)) @ state
+    validate_populations(state)
+    return state
+
+
 def quasistatic_response(states, *, radial_intervals=20, sectors=80,
                          moduli=None, poisson_ratio=0.25, tension_scale=20.0,
+                         radial_traction=0.0, outer_stiffness=None,
                          force_density_tol=1e-7, max_iterations=60):
     """Solve a fresh symmetric wall equilibrium for each attached fraction.
 
@@ -160,7 +182,8 @@ def quasistatic_response(states, *, radial_intervals=20, sectors=80,
     for i, value in enumerate(activation):
         model = ContinuumAirway(radial_intervals, sectors, moduli=moduli,
                                poisson_ratio=poisson_ratio, active_stress=tension_scale,
-                               activation=float(value))
+                               activation=float(value), radial_traction=radial_traction,
+                               outer_stiffness=outer_stiffness)
         result = model.solve(force_density_tol=force_density_tol, max_iterations=max_iterations)
         if (not result["converged"] or result["minimum_jacobian"] <= 0
                 or result["radii"][0] <= 0 or np.any(np.diff(result["radii"]) <= 0)
@@ -172,3 +195,67 @@ def quasistatic_response(states, *, radial_intervals=20, sectors=80,
     return {**{key: np.asarray([row[key] for row in rows]) for key in fields},
             "attached_fraction": attached.copy(), "tension_density": tension_scale * activation,
             "reference_radii": model.reference_radii.copy()}
+
+
+def coupled_response(times, protocol, *, rates=None, initial=None,
+                     strain_feedback=0.0, radial_intervals=20, sectors=80,
+                     moduli=None, poisson_ratio=0.25, tension_scale=20.0,
+                     radial_traction=0.0, outer_stiffness=None,
+                     force_density_tol=1e-7, max_iterations=60):
+    """Solve coupled cross-bridge kinetics and wall mechanics with optional strain feedback."""
+    if isinstance(strain_feedback, (bool, np.bool_)) or not np.isfinite(strain_feedback) or strain_feedback < 0:
+        raise ValueError("strain_feedback must be finite and nonnegative.")
+    strain_feedback = float(strain_feedback)
+    rates = HaiMurphyRates() if rates is None else rates
+    if strain_feedback == 0.0:
+        states = simulate(times, protocol, rates=rates, initial=initial)
+        wall = quasistatic_response(
+            states, radial_intervals=radial_intervals, sectors=sectors,
+            moduli=moduli, poisson_ratio=poisson_ratio, tension_scale=tension_scale,
+            radial_traction=radial_traction, outer_stiffness=outer_stiffness,
+            force_density_tol=force_density_tol, max_iterations=max_iterations)
+        return {**wall, "states": states}
+    times = np.asarray(times, dtype=float)
+    if (times.ndim != 1 or len(times) == 0 or not np.isfinite(times).all()
+            or times[0] < 0 or np.any(np.diff(times) <= 0)):
+        raise ValueError("Output times must be finite, nonnegative, and strictly increasing.")
+    state = validate_populations([1., 0., 0., 0.] if initial is None else initial).copy()
+    if state.ndim != 1:
+        raise ValueError("Specify one initial population.")
+    states = np.empty((len(times), 4))
+    rows = []
+    effective_activations = np.empty(len(times))
+    current_time = 0.0
+    muscle_strain = 0.0
+    for i, target in enumerate(times):
+        step_rates = HaiMurphyRates(
+            k2=rates.k2, k3=rates.k3, k4=rates.k4, k5=rates.k5,
+            k7=rates.k7 * (1.0 + 10.0 * strain_feedback * muscle_strain))
+        state = advance_population(state, current_time, float(target), protocol, rates=step_rates)
+        current_time = float(target)
+        states[i] = state
+        attached = float(state[2] + state[3])
+        overlap = float(np.exp(-strain_feedback * (muscle_strain ** 2)))
+        eff_act = float(np.clip(attached * overlap, 0.0, 1.0))
+        effective_activations[i] = eff_act
+        model = ContinuumAirway(
+            radial_intervals, sectors, moduli=moduli, poisson_ratio=poisson_ratio,
+            active_stress=tension_scale, activation=eff_act,
+            radial_traction=radial_traction, outer_stiffness=outer_stiffness)
+        result = model.solve(force_density_tol=force_density_tol, max_iterations=max_iterations)
+        if (not result["converged"] or result["minimum_jacobian"] <= 0
+                or result["radii"][0] <= 0 or np.any(np.diff(result["radii"]) <= 0)
+                or not np.array_equal(result["positions"][model.fixed], model.reference[model.fixed])):
+            raise RuntimeError(f"Wall equilibrium failed at sample {i}: residual={result['residual_density']:.3e}")
+        profile = model.wall_profile(result["radii"], eff_act)
+        muscle_strain = abs(1.0 - profile["muscle_stretch"])
+        rows.append(result)
+    fields = ("narrowing_percent", "lumen_area", "residual_density", "minimum_jacobian",
+              "iterations", "converged", "radii")
+    return {
+        **{key: np.asarray([row[key] for row in rows]) for key in fields},
+        "states": states,
+        "attached_fraction": states[:, 2] + states[:, 3],
+        "tension_density": tension_scale * effective_activations,
+        "reference_radii": model.reference_radii.copy(),
+    }

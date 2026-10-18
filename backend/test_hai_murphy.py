@@ -7,10 +7,10 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 try:
-    from .hai_murphy import ActivationProtocol, HaiMurphyRates, simulate, quasistatic_response
+    from .hai_murphy import ActivationProtocol, HaiMurphyRates, simulate, quasistatic_response, coupled_response, advance_population
     from .continuum import ContinuumAirway
 except ImportError:
-    from hai_murphy import ActivationProtocol, HaiMurphyRates, simulate, quasistatic_response
+    from hai_murphy import ActivationProtocol, HaiMurphyRates, simulate, quasistatic_response, coupled_response, advance_population
     from continuum import ContinuumAirway
 
 
@@ -56,6 +56,8 @@ class HaiMurphyTests(unittest.TestCase):
         # Sparse sampling must still integrate every internal switch.
         sparse = simulate([times[-1]], protocol)
         np.testing.assert_allclose(sparse[0], states[-1], atol=1e-13, rtol=0)
+        stepped = advance_population([1, 0, 0, 0], 0, times[-1], protocol)
+        np.testing.assert_allclose(stepped, states[-1], atol=1e-13, rtol=0)
         np.testing.assert_array_equal(protocol.values([0, 0.37, 2.81, 30.2]), [0, .55, .1, 0])
         before_after = simulate([0.37, 0.37 + 1e-9], protocol)
         np.testing.assert_allclose(before_after[0], [1, 0, 0, 0], atol=1e-15)
@@ -119,6 +121,14 @@ class HaiMurphyTests(unittest.TestCase):
         unloaded = quasistatic_response(states, radial_intervals=10, sectors=20, tension_scale=0)
         np.testing.assert_array_equal(unloaded["narrowing_percent"], 0)
 
+    def test_coupled_strain_feedback(self):
+        times = np.array([0, 10, 20, 30, 60, 120, 240])
+        protocol = ActivationProtocol((0, 10, 30, 120), (0, 0.55, 0.10, 0))
+        uncoupled = coupled_response(times, protocol, strain_feedback=0.0, radial_intervals=10, sectors=20)
+        coupled = coupled_response(times, protocol, strain_feedback=1.0, radial_intervals=10, sectors=20)
+        self.assertLess(coupled["narrowing_percent"].max(), uncoupled["narrowing_percent"].max())
+        self.assertLess(coupled["states"][-1, 3], uncoupled["states"][-1, 3])
+
     def test_failed_wall_solve_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "sample 0"):
             quasistatic_response([[0, 0, 1, 0]], radial_intervals=10, sectors=20, max_iterations=0)
@@ -142,6 +152,8 @@ class HaiMurphyTests(unittest.TestCase):
             HaiMurphyRates().generator(-1)
         with self.assertRaises(ValueError):
             HaiMurphyRates(k2=0, k3=0, k4=0, k5=0, k7=0).steady_state(0)
+        with self.assertRaises(ValueError):
+            coupled_response([0, 10], protocol, strain_feedback=-0.1)
 
 
 if __name__ == "__main__":

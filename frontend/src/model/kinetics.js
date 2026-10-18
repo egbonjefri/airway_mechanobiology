@@ -94,6 +94,57 @@ export function simulateKinetics(times, protocol = DEFAULT_PROTOCOL, rates = DEF
   });
 }
 
+export function steadyState(kinase, rates = DEFAULT_RATES) {
+  const Q = generator(kinase, rates);
+  const A = [
+    [Q[0], Q[1], Q[2], Q[3], 0],
+    [Q[4], Q[5], Q[6], Q[7], 0],
+    [Q[8], Q[9], Q[10], Q[11], 0],
+    [1, 1, 1, 1, 1],
+  ];
+  for (let col = 0; col < 4; col++) {
+    let pivot = col;
+    for (let row = col + 1; row < 4; row++) {
+      if (Math.abs(A[row][col]) > Math.abs(A[pivot][col])) pivot = row;
+    }
+    if (Math.abs(A[pivot][col]) < 1e-14) throw new Error('These rates do not determine a unique steady state.');
+    [A[col], A[pivot]] = [A[pivot], A[col]];
+    for (let row = col + 1; row < 4; row++) {
+      const factor = A[row][col] / A[col][col];
+      for (let k = col; k <= 4; k++) A[row][k] -= factor * A[col][k];
+    }
+  }
+  const result = [0, 0, 0, 0];
+  for (let row = 3; row >= 0; row--) {
+    let sum = A[row][4];
+    for (let col = row + 1; col < 4; col++) sum -= A[row][col] * result[col];
+    result[row] = sum / A[row][row];
+  }
+  validatePopulation(result);
+  return result;
+}
+
+export function advancePopulation(state, startTime, endTime, protocol = DEFAULT_PROTOCOL, rates = DEFAULT_RATES) {
+  validateProtocol(protocol);
+  validatePopulation(state);
+  generator(0, rates);
+  if (![startTime, endTime].every(Number.isFinite) || startTime < 0 || endTime < startTime) {
+    throw new Error('Interval times must be finite, nonnegative, and ordered.');
+  }
+  let current = [...state];
+  if (endTime === startTime) return current;
+  const switches = protocol.switchTimes.filter(t => t > startTime && t < endTime);
+  const knots = [startTime, ...switches, endTime];
+  for (let i = 0; i + 1 < knots.length; i++) {
+    const duration = knots[i + 1] - knots[i];
+    const kinase = kinaseAt(knots[i], protocol);
+    const matrix = transitionMatrix(duration, kinase, rates);
+    current = current.map((_, r) => current.reduce((sum, val, c) => sum + matrix[4 * r + c] * val, 0));
+  }
+  validatePopulation(current);
+  return current;
+}
+
 export function notebookTimes() {
   return [...Array.from({ length: 641 }, (_, i) => i * .25),
     ...Array.from({ length: 352 }, (_, i) => 161.25 + i * 1.25)];
