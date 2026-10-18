@@ -22,8 +22,11 @@ convergence diagnostics, populations, and radial profiles for every accepted tim
 The airway illustration magnifies radial displacement up to 10× by default, with
 the scale shown below it. One factor applies to the entire run; larger contractions
 use a smaller factor to keep the displayed lumen and layers readable. **View & mesh**
-includes a true-scale option. Tissue textures are illustrative; percentages, plots,
-and exported radii always retain the actual model values.
+includes a true-scale option. The wall is drawn as an illustrative section in the
+colours of a Movat pentachrome stain, painted once in the resting geometry and
+warped by the solved displacement with WebGL, so every layer stretches exactly as
+the model wall does. Playback interpolates the drawing between accepted equilibria;
+percentages, plots, and exported radii always retain the actual model values.
 
 Select **Prescribed activation** for a static equilibrium, then open **Tissue
 stiffness** and choose **Compare tissue stiffness** to reproduce the five non-muscle stiffness multipliers. Changing any

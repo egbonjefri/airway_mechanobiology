@@ -4,6 +4,7 @@ import StiffnessCurveChart from './StiffnessCurveChart.js';
 import LineChart from './LineChart.js';
 import { DEFAULT_PARAMS } from './simulation.js';
 import { deformationScale } from './deformation.js';
+import { STAIN } from './histology.js';
 import './index.css';
 
 const REPOSITORY = 'https://github.com/egbonjefri/airway_mechanobiology';
@@ -12,7 +13,7 @@ const formatNumber = value => Number(value.toFixed(3)).toString();
 const LAYERS = [
   { key: 'mucosa', label: 'Mucosa / submucosa', base: 25 },
   { key: 'muscle', label: 'Smooth muscle', base: 50 },
-  { key: 'cartilage', label: 'Cartilage (schematic)', base: 150 },
+  { key: 'cartilage', label: 'Cartilage', base: 150 },
   { key: 'adventitia', label: 'Adventitia', base: 75 },
 ];
 
@@ -40,7 +41,8 @@ function App() {
   const [curve, setCurve] = useState(null);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(30);
+  const [clock, setClock] = useState(0);
+  const [speed, setSpeed] = useState(10);
   const [showMesh, setShowMesh] = useState(false);
   const [trueScale, setTrueScale] = useState(false);
   const [plot, setPlot] = useState('narrowing');
@@ -51,10 +53,17 @@ function App() {
   const workerRef = useRef(null);
   const runId = useRef(0);
   const frameRef = useRef(0);
+  const comparisonRef = useRef(null);
   frameRef.current = currentFrame;
   const busy = task !== null;
 
   useEffect(() => () => workerRef.current?.terminate(), []);
+  // The comparison appears below the controls, so bring it into view when it is ready.
+  useEffect(() => {
+    if (!curve) return;
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    comparisonRef.current?.scrollIntoView({ behavior: motion, block: 'nearest' });
+  }, [curve]);
   useEffect(() => {
     if (!playing || simulation?.mode !== 'kinetic') return undefined;
     let handle, start;
@@ -63,7 +72,7 @@ function App() {
     const tick = timestamp => {
       if (start === undefined) start = timestamp;
       const time = Math.min(endTime, initialTime + (timestamp - start) * speed / 1000);
-      setCurrentFrame(frameAtTime(simulation.frames, time));
+      setClock(time); setCurrentFrame(frameAtTime(simulation.frames, time));
       if (time >= endTime) setPlaying(false); else handle = requestAnimationFrame(tick);
     };
     handle = requestAnimationFrame(tick);
@@ -128,6 +137,14 @@ function App() {
     (_, i) => parameters.innerRadius + (parameters.outerRadius - parameters.innerRadius) * i / parameters.radialIntervals),
   [parameters.radialIntervals, parameters.innerRadius, parameters.outerRadius]);
   const selected = simulation?.frames[Math.min(currentFrame, simulation.frames.length - 1)];
+  // While playing, draw between accepted equilibria so the wall moves smoothly.
+  // Every number shown still comes from the accepted frame.
+  const drawnRadii = useMemo(() => {
+    const next = simulation?.frames[currentFrame + 1];
+    if (!playing || !next || clock <= selected.time) return selected?.radii;
+    const weight = Math.min(1, (clock - selected.time) / (next.time - selected.time));
+    return selected.radii.map((radius, i) => radius + weight * (next.radii[i] - radius));
+  }, [playing, clock, simulation, currentFrame, selected]);
   const magnification = useMemo(() => trueScale ? 1
     : deformationScale(simulation?.referenceRadii || referenceRadii, simulation?.frames),
   [trueScale, simulation, referenceRadii]);
@@ -151,14 +168,14 @@ function App() {
         series('Mp · phosphorylated', 'var(--phosphorylated)', f => f.states[1]),
         series('AMp · attached', 'var(--muscle)', f => f.states[2]),
         series('AM · latch', 'var(--latch)', f => f.states[3])],
-      input: [{ label: 'k₁ = k₆', color: 'var(--kinase)', points: inputPoints }],
+      input: [{ label: 'k1 = k6', color: 'var(--kinase)', points: inputPoints }],
     };
   }, [simulation]);
   const plots = {
     narrowing: { title: 'Lumen narrowing', yLabel: 'Narrowing (%)' },
     tension: { title: 'Muscle tension', yLabel: 'Tension density' },
     states: { title: 'Cross-bridges', yLabel: 'Population fraction', yLimit: 1 },
-    input: { title: 'Kinase input', yLabel: 'Rate (s⁻¹)' },
+    input: { title: 'Kinase input', yLabel: 'Rate (1/s)' },
   };
 
   return <main className="app">
@@ -171,10 +188,10 @@ function App() {
 
     <div className="workspace">
       <section className="figure" aria-label="Airway geometry and current result">
-        <GridVisualizer radii={selected?.radii || referenceRadii} referenceRadii={simulation?.referenceRadii || referenceRadii}
+        <GridVisualizer radii={drawnRadii || referenceRadii} referenceRadii={simulation?.referenceRadii || referenceRadii}
           sectors={parameters.sectors} narrowing={selected?.narrowingPercent ?? null} showMesh={showMesh} magnification={magnification} />
         <ul className="legend">{LAYERS.map(layer => <li key={layer.key}>
-          <span className="swatch" style={{ background: `var(--${layer.key})` }} aria-hidden="true" />{layer.label}</li>)}</ul>
+          <span className="swatch" style={{ background: STAIN[layer.key] }} aria-hidden="true" />{layer.label}</li>)}</ul>
         <p className="figure-caption">{magnification === 1 ? 'True scale' : `Deformation ×${magnification}`}
           {selected && ' · dashed: resting lumen'}</p>
 
@@ -187,7 +204,7 @@ function App() {
             <button type="button" className="secondary" onClick={() => { setPlaying(false); setCurrentFrame(0); }}>To start</button>
             <label htmlFor="playback-speed">Speed</label>
             <select id="playback-speed" value={speed} onChange={event => setSpeed(Number(event.target.value))}>
-              {[10, 30, 60].map(value => <option key={value} value={value}>{value}×</option>)}
+              {[5, 10, 30, 60].map(value => <option key={value} value={value}>{value}×</option>)}
             </select>
           </div>
           <div className="time-scrubber">
@@ -235,7 +252,7 @@ function App() {
         <fieldset disabled={busy}>
           <div className="primary-control">
             {mode === 'kinetic'
-              ? <Slider id="peak-kinase" label="Initial kinase rate (s⁻¹)" value={parameters.peakKinase} min={0} max={1} step={.05} onChange={value => change('peakKinase', value)} />
+              ? <Slider id="peak-kinase" label={<>Initial kinase rate (s<sup>−1</sup>)</>} value={parameters.peakKinase} min={0} max={1} step={.05} onChange={value => change('peakKinase', value)} />
               : <Slider id="activation" label="Prescribed activation" value={parameters.activation} min={0} max={1} step={.05} format={value => `${(100 * value).toFixed(0)}%`} onChange={value => change('activation', value)} />}
           </div>
           <details className="settings-group">
@@ -243,14 +260,14 @@ function App() {
             {mode === 'kinetic' && <p className="note">Initial kinase input: 10–30 s.</p>}
             <div className="control-grid">
               {mode === 'kinetic' && <>
-                <Slider id="sustained-kinase" label="Kinase, 30 s–off (s⁻¹)" value={parameters.sustainedKinase} min={0} max={.5} step={.01} onChange={value => change('sustainedKinase', value)} />
+                <Slider id="sustained-kinase" label={<>Kinase, 30 s–off (s<sup>−1</sup>)</>} value={parameters.sustainedKinase} min={0} max={.5} step={.01} onChange={value => change('sustainedKinase', value)} />
                 <Slider id="withdrawal-time" label="Kinase off (s)" value={parameters.withdrawalTime} min={40} max={300} step={10} onChange={value => change('withdrawalTime', value)} />
-                <Slider id="latch-detachment" label="Latch detachment (s⁻¹)" value={parameters.latchDetachment} min={.005} max={.1} step={.005}
+                <Slider id="latch-detachment" label={<>Latch detachment (s<sup>−1</sup>)</>} value={parameters.latchDetachment} min={.005} max={.1} step={.005}
                   format={value => value.toFixed(3)} onChange={value => change('latchDetachment', value)} />
               </>}
               <Slider id="tension-scale" label="Max. tension density" value={parameters.tensionScale} min={0} max={20} step={1} onChange={value => change('tensionScale', value)} />
             </div>
-            {mode === 'kinetic' && <p className="note">Fixed rates (s⁻¹): k₂ = k₅ = 0.5, k₃ = 0.4, k₄ = 0.1.</p>}
+            {mode === 'kinetic' && <p className="note">Fixed rates (s<sup>−1</sup>): k<sub>2</sub> = k<sub>5</sub> = 0.5, k<sub>3</sub> = 0.4, k<sub>4</sub> = 0.1.</p>}
           </details>
           <details className="settings-group">
             <summary>Tissue stiffness</summary>
@@ -299,7 +316,7 @@ function App() {
       <LineChart {...plots[plot]} series={timeSeries[plot]} xLabel="Time (s)" cursor={selected.time} showTitle={false} />
     </section>}
 
-    {curve && <section className="curve" aria-label="Tissue stiffness comparison">
+    {curve && <section className="curve" aria-label="Tissue stiffness comparison" ref={comparisonRef}>
       <StiffnessCurveChart data={curve.points} />
       <p className="note">{(100 * curve.parameters.activation).toFixed(0)}% activation · muscle modulus {formatNumber(curve.parameters.moduli.muscle)} ·
         maximum tension density {formatNumber(curve.parameters.tensionScale)}</p>
@@ -316,7 +333,8 @@ function App() {
       <summary>Model assumptions</summary>
       <p>Radial motion is magnified up to 10× to make small deformations visible. The scale shown below the diagram
         stays fixed throughout each run and is reduced for large contractions. Percentages, plots, and exported
-        radii use the actual model results. Tissue textures are illustrative.</p>
+        radii use the actual model results. Tissue textures are illustrative, and the cartilage is a schematic
+        continuous ring rather than the separate plates of a real airway.</p>
       <p>Axisymmetric, compressible neo-Hookean wall in plane strain; fixed outer boundary; Poisson ratio 0.25.
         Circumferential tension is proportional to attached cross-bridges (AMp + AM).
         Each time point is a static wall equilibrium.</p>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-export const FONT_FAMILY = 'Newsreader, Georgia, serif';
+export const FONT_FAMILY = '"IBM Plex Sans", system-ui, sans-serif';
 
 // Canvas drawing can't use CSS variables directly, so read them from :root
 const readColors = () => {
@@ -28,7 +28,7 @@ export function useThemeColors() {
     const update = () => setColors(readColors());
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     media.addEventListener('change', update);
-    // Redraw once Newsreader is ready so canvas labels don't stay in the fallback font
+    // Redraw once IBM Plex Sans is ready so canvas labels don't stay in the fallback font
     document.fonts?.ready.then(update);
     return () => media.removeEventListener('change', update);
   }, []);

@@ -27,12 +27,16 @@ export default function LineChart({ title, series, xLabel, yLabel, xTicks, curso
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${title}. ${description || `${yLabel} versus ${xLabel}`}`}>
         {Array.from({ length: Math.floor(layout.yMax / layout.step) + 1 }, (_, i) => i * layout.step).map(value => (
           <g key={value}>
-            <line x1={P.left} x2={W - P.right} y1={layout.y(value)} y2={layout.y(value)} className="chart-grid" />
+            <line x1={P.left} x2={P.left + 6} y1={layout.y(value)} y2={layout.y(value)} className="chart-axis" />
             <text x={P.left - 10} y={layout.y(value) + 4} textAnchor="end" className="chart-tick">{format(value)}</text>
           </g>
         ))}
-        {layout.xTicks.map(value => <text key={value} x={layout.x(value)} y={H - P.bottom + 23} textAnchor="middle" className="chart-tick">{format(value)}</text>)}
+        {layout.xTicks.map(value => <g key={value}>
+          <line x1={layout.x(value)} x2={layout.x(value)} y1={H - P.bottom} y2={H - P.bottom - 6} className="chart-axis" />
+          <text x={layout.x(value)} y={H - P.bottom + 23} textAnchor="middle" className="chart-tick">{format(value)}</text>
+        </g>)}
         {series.map((s, i) => <path key={s.label} d={layout.paths[i]} fill="none" stroke={s.color} strokeWidth="2" strokeDasharray={s.dashed ? '6 4' : undefined} />)}
+        <rect x={P.left} y={P.top} width={W - P.left - P.right} height={H - P.top - P.bottom} fill="none" className="chart-axis" />
         {cursor !== undefined && <line x1={layout.x(cursor)} x2={layout.x(cursor)} y1={P.top} y2={H - P.bottom} className="chart-cursor" />}
         <text x={(W + P.left - P.right) / 2} y={H - 6} textAnchor="middle" className="chart-label">{xLabel}</text>
         <text transform={`translate(17 ${(H + P.top - P.bottom) / 2}) rotate(-90)`} textAnchor="middle" className="chart-label">{yLabel}</text>
