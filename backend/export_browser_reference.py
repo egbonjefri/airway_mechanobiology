@@ -1,7 +1,7 @@
 """Regenerate independent Python fixtures for the browser's numerical parity tests.
 
 Run from the repository root: python -m backend.export_browser_reference
-The notebook's saved phase 3/4 reports provide the main reference grids; this
+The notebook's saved reports in results/ provide the main reference grids; this
 fixture adds non-default geometry, materials, rates, and off-grid input switches.
 """
 from dataclasses import asdict

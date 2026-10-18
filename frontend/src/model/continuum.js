@@ -1,4 +1,4 @@
-// Browser counterpart of backend/continuum.py (notebook section 11).
+// Browser counterpart of backend/continuum.py.
 // Rotational symmetry lets us integrate one sector and repeat it exactly.
 // Two-dimensional forces at a representative node include BOTH adjacent
 // sectors; rotating these vectors gives every node's force on its ring.

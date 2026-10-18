@@ -7,8 +7,9 @@ import { DEFAULT_RATES, generator, simulateKinetics, notebookTimes, kinaseAt } f
 import { runSimulation, generateStiffnessCurve, DEFAULT_PARAMS } from '../src/simulation.js';
 
 const load = path => JSON.parse(readFileSync(new URL(path, import.meta.url)));
-const spatial = load('../../backend/results/phase3_mesh_convergence.json');
-const kinetic = load('../../backend/results/phase4_kinetics.json');
+const mesh = load('../../backend/results/mesh_convergence.json');
+const sweep = load('../../backend/results/stiffness_sweep.json');
+const kinetic = load('../../backend/results/time_course.json');
 const independent = load('./python-reference.json');
 const close = (actual, expected, tolerance = 1e-10, label = '') => {
   assert.ok(Number.isFinite(actual) && Math.abs(actual - expected) <= tolerance,
@@ -29,7 +30,7 @@ test('custom fixtures match the current Python source', () => {
 });
 
 test('all 11 notebook refinement meshes match the Python equilibria', () => {
-  for (const reference of spatial.refinement_cases) {
+  for (const reference of mesh.cases) {
     const wall = new ContinuumAirway({ radialIntervals: reference.radial_intervals, sectors: reference.sectors });
     const result = wall.solve(1);
     assert.equal(result.converged, true);
@@ -37,20 +38,20 @@ test('all 11 notebook refinement meshes match the Python equilibria', () => {
     close(result.narrowingPercent, reference.narrowing_percent, 2e-7);
     close(result.lumenArea, reference.lumen_area, 1e-8);
     close(result.minimumJacobian, reference.minimum_jacobian, 1e-8);
-    arrayClose(result.radii, reference.deformed_radii, 2e-9);
+    arrayClose(result.radii, reference.radii, 2e-9);
     assert.equal(result.radii.at(-1), wall.outerRadius);
   }
 });
 
 test('all 25 stiffness–activation cases match the notebook continuum sweep', () => {
-  for (const reference of spatial.revisited_sweep) {
+  for (const reference of sweep.cases) {
     const moduli = Object.fromEntries(Object.entries(DEFAULT_MODULI).map(([key, value]) =>
       [key, value * (key === 'muscle' ? 1 : reference.stiffness_multiplier)]));
     const wall = new ContinuumAirway({ moduli });
     const result = wall.solve(reference.activation);
     assert.equal(result.converged, true);
-    close(result.narrowingPercent, reference.working_narrowing_percent, 2e-7);
-    arrayClose(result.radii.map((r, i) => r - wall.referenceRadii[i]), reference.working_radial_displacement, 2e-9);
+    close(result.narrowingPercent, reference.narrowing_percent, 2e-7);
+    arrayClose(result.radii.map((r, i) => r - wall.referenceRadii[i]), reference.radial_displacement, 2e-9);
   }
 });
 
@@ -114,8 +115,8 @@ test('complete browser time course matches all 993 notebook wall snapshots', () 
     assert.ok(frame.radii.every((r, j) => r > 0 && (!j || r > frame.radii[j - 1])));
     assert.equal(frame.radii.at(-1), 2);
   });
-  close(result.summary.peakNarrowing, kinetic.summary.peak_sampled_narrowing_percent, 2e-7);
-  assert.equal(result.summary.peakTime, kinetic.summary.peak_sampled_time_seconds);
+  close(result.summary.peakNarrowing, kinetic.peak_narrowing_percent, 2e-7);
+  assert.equal(result.summary.peakTime, kinetic.peak_time_seconds);
 });
 
 test('zero input and zero tension limits do not narrow the wall', () => {
@@ -133,8 +134,8 @@ test('prescribed activation and stiffness comparison match the notebook and carr
   close(result.frames[0].narrowingPercent, 5.350552600653, 2e-7);
   const curve = generateStiffnessCurve();
   curve.points.forEach(point => {
-    const reference = spatial.revisited_sweep.find(r => r.stiffness_multiplier === point.x && r.activation === 1);
-    close(point.y, reference.working_narrowing_percent, 2e-7);
+    const reference = sweep.cases.find(r => r.stiffness_multiplier === point.x && r.activation === 1);
+    close(point.y, reference.narrowing_percent, 2e-7);
   });
   const soft = runSimulation({ moduli: { ...DEFAULT_MODULI, cartilage: 37.5 } }, { mode: 'prescribed' });
   assert.ok(soft.frames[0].narrowingPercent > result.frames[0].narrowingPercent);

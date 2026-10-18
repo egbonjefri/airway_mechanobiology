@@ -1,4 +1,4 @@
-"""Verification of the phase 3 energy, forces, quadrature, and equilibrium solver."""
+"""Verification of the continuum wall: energy, forces, quadrature, and equilibrium solver."""
 
 import unittest
 import numpy as np

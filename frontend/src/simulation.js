@@ -1,4 +1,4 @@
-// The browser uses the same final model as sim.ipynb sections 11–12.
+// The browser uses the same model as backend/sim.ipynb.
 // The legacy mass-spring implementation remains in backend/simulation.py.
 import { ContinuumAirway, DEFAULT_MODULI, TISSUES } from './model/continuum.js';
 import { DEFAULT_RATES, simulateKinetics, notebookTimes, kinaseAt } from './model/kinetics.js';

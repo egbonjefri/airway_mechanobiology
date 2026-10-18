@@ -51,7 +51,7 @@ unfinished or geometrically invalid equilibria are never presented as results.
   phosphorylated `Mp`, attached phosphorylated `AMp`, and attached latch `AM`.
   Rates in s⁻¹ are `k2 = k5 = 0.5`, `k3 = 0.4`, `k4 = 0.1`, and `k7 = 0.01`.
   The prescribed input `k1 = k6` is 0 before 10 s, 0.55 from 10–30 s, 0.10 from
-  30–120 s, then zero. These defaults match notebook section 12.
+  30–120 s, then zero. These defaults match the notebook.
 - **Coupling:** solve a fresh rotationally symmetric wall equilibrium at each
   kinetic output time. Require free-node force density below `1e-7`, positive
   element Jacobians, ordered positive radii, and the fixed outer boundary.
@@ -105,8 +105,8 @@ Reference checks at notebook defaults:
 The test tolerances for browser–Python agreement are `2e-12` for kinetic
 fractions, `2e-9` for radii, and `2e-7` percentage points for narrowing. These
 implementation checks are distinct from spatial convergence and biological
-validation. The notebook's accepted working mesh applies to its stated parameter
-grid; custom parameters still require interpretation within the model's limits.
+validation. The notebook's mesh study uses the default parameters; custom
+parameters still require interpretation within the model's limits.
 
 After changing the Python model, rerun the notebook and regenerate the custom
 fixtures from the repository root:
@@ -129,27 +129,12 @@ python -m jupyterlab backend/sim.ipynb
 python -m unittest backend.test_continuum backend.test_hai_murphy -v
 ```
 
-Choose **Restart Kernel and Run All Cells**; the full run takes several minutes.
-All four phases are tracked in [PHASED_CHECKLIST.md](PHASED_CHECKLIST.md).
-
-The notebook first develops a spring network and verifies passive forces,
-shear resistance, prescribed contraction, and layer-specific spring stiffnesses.
-Those sections provide the developmental background. Section 10 saves the legacy
-spring sweep to [phase2_sweep.json](backend/results/phase2_sweep.json).
-
-**Section 11** introduces the continuum formulation used by the browser, defines
-spatial scaling and fixed tissue interfaces, and checks radial, angular, and joint
-refinement. It also revisits the stiffness–activation sweep. Evidence is saved to
-[phase3_mesh_convergence.json](backend/results/phase3_mesh_convergence.json).
-This explicit constitutive change does not establish mesh independence of the
-original spring network.
-
-**Section 12** supplies the browser's kinetic model, rate provenance, protocol,
-and quasistatic coupling. It verifies nonnegativity, conservation, analytic limits,
-published steady-state equations, an independent ODE solver, temporal refinement,
-and selected finer spatial meshes. Trajectories and evidence are saved to
-[phase4_kinetics.json](backend/results/phase4_kinetics.json). The executed notebook
-contains 29 code cells and 11 plots, with 17 standalone Python verification tests.
+Choose **Restart Kernel and Run All Cells**; the run takes a few minutes. The
+notebook states the model, checks mesh convergence and the kinetics against Hai and
+Murphy's published steady-state equations, and reports the activation–relaxation
+time course and the stiffness–activation sweep. It saves the reference results used
+by the browser tests to [`backend/results/`](backend/results): `mesh_convergence.json`,
+`stiffness_sweep.json`, and `time_course.json`.
 
 ## Legacy implementation
 
