@@ -110,6 +110,48 @@ implementation checks are distinct from spatial convergence and biological
 validation. The notebook's mesh study uses the default parameters; custom
 parameters still require interpretation within the model's limits.
 
+### Two-way coupling: matching schedules and checking sensitivity
+
+With strain feedback enabled, each equilibrium updates the strain used for the
+next kinetic interval and its filament-overlap factor. Output times therefore
+also define the coupling integration schedule. The former eight-time Python
+fixture was **not** directly comparable to the browser's 993-time trajectory,
+even at shared timestamps. It differed by up to 0.02048 in population fraction,
+0.001493 in radius, 0.29669 percentage points in narrowing, and 0.41050 in tension
+density for the fixture parameters.
+
+The coupled fixture now runs Python `coupled_response` on the full schedule in
+`backend/results/time_course.json`: 0–160 s in 0.25 s steps, then 161.25–600 s in
+1.25 s steps. The browser test requires exactly that schedule and compares every
+population, wall radius, radial displacement, narrowing value, and tension
+value at all 993 times. The case uses strain feedback 0.8, 10 radial intervals,
+24 sectors, and outer tether stiffness 40. It retains the established absolute
+tolerances: `2e-12` for populations, `2e-9` for radii/displacements, `2e-7`
+percentage points for narrowing, and `1e-10` for tension density. These allow
+floating-point and equilibrium-solver differences without absorbing the much
+larger integration-schedule error. Observed maximum differences were below
+`9e-15`, `9e-16`, `1.5e-13`, and `1.7e-13`, respectively, in the regeneration
+used for this update.
+
+The fixture generator also repeats this Python case on midpoint-refined grids
+of 1,985 and 3,969 times. It records maximum differences at the original shared
+times in `coupled_case.schedule_sensitivity`. Production-to-half-step and
+half-to-quarter-step differences were respectively:
+
+| Quantity | Production vs half step | Half vs quarter step |
+|---|---:|---:|
+| Population fraction | 6.024e-5 | 3.007e-5 |
+| Radius / radial displacement | 4.395e-6 | 2.194e-6 |
+| Narrowing (percentage points) | 8.641e-4 | 4.314e-4 |
+| Tension density | 1.211e-3 | 6.045e-4 |
+
+The approximately twofold reduction is consistent with lagged, first-order
+coupling for this case; it is not a convergence proof or a universal error
+bound. Cross-language agreement is established for the same discrete schedule,
+not for a schedule-independent continuous-time solution or every parameter
+combination. Neither this check nor timestep refinement provides biological
+validation. No mechanics or browser integration schedule was changed.
+
 After changing the Python model, rerun the notebook and regenerate the custom
 fixtures from the repository root:
 

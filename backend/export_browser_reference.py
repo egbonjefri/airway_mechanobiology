@@ -81,21 +81,58 @@ def export():
         "states": simulate(times, protocol, rates=rates, initial=initial).tolist(),
         "steady_state_071": rates.steady_state(0.71).tolist(),
     }
-    coupled_times = [0, 10, 20, 30, 60, 120, 300, 600]
+    # Feedback is held at the preceding equilibrium, so these are integration
+    # times, not merely reporting times. Use the notebook's saved production
+    # schedule, independently of the browser implementation under test.
+    coupled_times = np.asarray(json.loads(
+        (root / "backend" / "results" / "time_course.json").read_text())["time_seconds"])
     coupled_proto = ActivationProtocol((0, 10, 30, 120), (0, 0.55, 0.10, 0))
     coupled = coupled_response(
         coupled_times, coupled_proto, strain_feedback=0.8,
         radial_intervals=10, sectors=24, outer_stiffness=40.0)
     report["coupled_case"] = {
-        "times": coupled_times,
+        "times": coupled_times.tolist(),
+        "schedule_source": "backend/results/time_course.json:time_seconds",
         "strain_feedback": 0.8,
         "radial_intervals": 10,
         "sectors": 24,
         "outer_stiffness": 40.0,
         "states": coupled["states"].tolist(),
         "radii": coupled["radii"].tolist(),
+        "reference_radii": coupled["reference_radii"].tolist(),
+        "radial_displacement": (coupled["radii"] - coupled["reference_radii"]).tolist(),
         "narrowing_percent": coupled["narrowing_percent"].tolist(),
         "tension_density": coupled["tension_density"].tolist(),
+    }
+    # Separate time-discretization sensitivity from cross-language agreement.
+    # Refinement inserts equilibria, so it intentionally changes the trajectory.
+    def response(times):
+        return coupled_response(times, coupled_proto, strain_feedback=0.8,
+                                radial_intervals=10, sectors=24, outer_stiffness=40.0)
+
+    def differences(left, right):
+        return {key: float(np.max(np.abs(left[key] - right[key])))
+                for key in ("states", "radii", "narrowing_percent", "tension_density")}
+
+    sparse_times = np.array([0, 10, 20, 30, 60, 120, 300, 600])
+    sparse = response(sparse_times)
+    sparse_indices = np.searchsorted(coupled_times, sparse_times)
+    assert np.array_equal(coupled_times[sparse_indices], sparse_times)
+    sampled = {key: values[sparse_indices] for key, values in coupled.items()
+               if key in ("states", "radii", "narrowing_percent", "tension_density")}
+    half_times = np.sort(np.r_[coupled_times, (coupled_times[:-1] + coupled_times[1:]) / 2])
+    quarter_times = np.sort(np.r_[half_times, (half_times[:-1] + half_times[1:]) / 2])
+    half = response(half_times)
+    quarter = response(quarter_times)
+    half_sampled = {key: half[key][::2] for key in sampled}
+    quarter_sampled = {key: quarter[key][::4] for key in sampled}
+    report["coupled_case"]["schedule_sensitivity"] = {
+        "description": "Maximum absolute differences at shared timestamps; not parity tolerances or a convergence proof.",
+        "sparse_times": sparse_times.tolist(),
+        "sample_counts": [len(coupled_times), len(half_times), len(quarter_times)],
+        "sparse_vs_production": differences(sparse, sampled),
+        "production_vs_half_step": differences(coupled, half_sampled),
+        "half_vs_quarter_step": differences(half_sampled, quarter_sampled),
     }
     output = root / "frontend" / "tests" / "python-reference.json"
     output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")

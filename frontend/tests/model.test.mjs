@@ -121,9 +121,18 @@ test('two-way mechanochemical strain feedback matches Python coupled_response', 
     outerStiffness: c.outer_stiffness,
     strainFeedback: c.strain_feedback,
   });
-  c.times.forEach((t, idx) => {
-    const frame = sim.frames.find(f => f.time === t);
-    assert.ok(frame, `Missing time ${t}`);
+  // With lagged strain feedback, output times are also mechanical update times.
+  // Comparing only matching timestamps from a sparse trajectory is not valid.
+  assert.deepEqual(c.times, kinetic.time_seconds, 'Python must use the notebook integration schedule');
+  assert.deepEqual(sim.frames.map(frame => frame.time), c.times, 'Coupled integration schedules must match');
+  arrayClose(sim.referenceRadii, c.reference_radii, 1e-14, 'reference radii');
+  sim.frames.forEach((frame, idx) => {
+    const label = `coupled t=${frame.time}`;
+    arrayClose(frame.states, c.states[idx], 2e-12, `${label} populations`);
+    arrayClose(frame.radii, c.radii[idx], 2e-9, `${label} radii`);
+    arrayClose(frame.profile.displacement, c.radial_displacement[idx], 2e-9, `${label} displacement`);
+    close(frame.narrowingPercent, c.narrowing_percent[idx], 2e-7, `${label} narrowing`);
+    close(frame.tensionDensity, c.tension_density[idx], 1e-10, `${label} tension`);
   });
   const uncoupled = runSimulation({ radialIntervals: 10, sectors: 24 });
   const coupled = runSimulation({ radialIntervals: 10, sectors: 24, strainFeedback: 0.8 });
